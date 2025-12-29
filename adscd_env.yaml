@@ -11,7 +11,7 @@ dependencies:
   - torchvision=0.15.2
   - numpy=1.23.3
   - scipy==1.9.1
-  - py-opencv=4.6.0
+  - py-opencv=4.6.0.66
   - h5py=3.7.0
   - hydra-core=1.2.0
   - einops=0.4.1
@@ -20,7 +20,8 @@ dependencies:
   - accelerate=0.13.2
   - datasets=2.6.1
   - diffusers=0.11.1
+  - ray[default,tune]==2.2.0
+  - matplotlib=3.6.1  # 添加这一行
   - pip:
-    - ray[default,tune]==2.2.0
-    - robomimic==0.2.0
-    - pytorchvideo==0.1.5
+    - --no-deps robomimic==0.2.0
+    - --no-deps pytorchvideo==0.1.5
