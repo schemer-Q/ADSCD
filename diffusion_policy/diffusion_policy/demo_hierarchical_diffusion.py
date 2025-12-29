@@ -23,8 +23,8 @@ import os
 current_file = os.path.abspath(__file__)
 # 计算项目根目录（ADSCD目录）
 # 当前文件路径：/root/private_data/latent_diffusion_policy/ADSCD/diffusion_policy/diffusion_policy/demo_hierarchical_diffusion.py
-# 需要向上5层到ADSCD目录
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file)))))
+# 需要向上4层到ADSCD目录（从demo_hierarchical_diffusion.py到ADSCD）
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file))))
 # 添加项目根目录到Python路径
 sys.path.append(project_root)
 # 添加diffusion_policy目录到Python路径
@@ -35,6 +35,10 @@ sys.path.append(os.path.join(project_root, 'train'))
 print(f"Current file: {current_file}")
 print(f"Project root: {project_root}")
 print(f"Python path: {sys.path}")
+# 检查目录是否存在
+print(f"ADSCD目录存在: {os.path.exists(project_root)}")
+print(f"diffusion_policy目录存在: {os.path.exists(os.path.join(project_root, 'diffusion_policy'))}")
+print(f"train目录存在: {os.path.exists(os.path.join(project_root, 'train'))}")
 import torch
 import hydra
 from omegaconf import OmegaConf
