@@ -1,13 +1,22 @@
-# 修复torch.xpu问题
+# 修复torch.xpu和torch.mps问题
 import torch
-if not hasattr(torch, 'xpu'):
-    class DummyXPU:
-        @staticmethod
-        def empty_cache():
-            pass
-    
-    torch.xpu = DummyXPU
-    torch.xpu.empty_cache = lambda: None
+for backend in ['xpu', 'mps', 'vulkan', 'rocm']:
+    if not hasattr(torch, backend):
+        class DummyBackend:
+            @staticmethod
+            def empty_cache():
+                pass
+            
+            @staticmethod
+            def current_stream():
+                return None
+            
+            @staticmethod
+            def synchronize():
+                pass
+
+        setattr(torch, backend, DummyBackend)
+        setattr(getattr(torch, backend), 'empty_cache', lambda: None)
 import sys
 import os
 # 添加父目录到Python路径
