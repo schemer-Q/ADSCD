@@ -19,10 +19,17 @@ for backend in ['xpu', 'mps', 'vulkan', 'rocm']:
         setattr(getattr(torch, backend), 'empty_cache', lambda: None)
 import sys
 import os
+# 获取当前文件的绝对路径
+current_file = os.path.abspath(__file__)
+# 计算项目根目录（ADSCD目录）
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file))))
 # 添加项目根目录到Python路径
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
-# 添加父目录到Python路径
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(project_root)
+# 添加train目录到Python路径
+sys.path.append(os.path.join(project_root, 'train'))
+# 打印调试信息
+print(f"Project root: {project_root}")
+print(f"Python path: {sys.path}")
 import torch
 import hydra
 from omegaconf import OmegaConf
