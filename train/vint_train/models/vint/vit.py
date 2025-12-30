@@ -217,6 +217,10 @@ class MaskedGoalViT(nn.Module):
             # Resize final_mask to match x sequence length
             final_mask = F.interpolate(final_mask.unsqueeze(1), size=x.shape[1], mode='nearest').squeeze(1)
         
+        # Ensure final_mask has correct embedding dimension for broadcasting
+        if final_mask.shape[-1] != x.shape[-1]:
+            final_mask = final_mask.expand(-1, -1, x.shape[-1])
+        
         x = x * final_mask 
         x = x.mean(dim = 1)
 
