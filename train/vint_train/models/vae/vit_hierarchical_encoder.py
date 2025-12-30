@@ -4,17 +4,24 @@ from torch import nn
 from einops import rearrange
 from typing import Optional, Tuple
 
-# Add train directory to path for imports
+# Dynamically import MaskedGoalViT to handle path issues
 import pathlib
-this_file = pathlib.Path(__file__).resolve()
-project_root = this_file.parent.parent.parent.parent
-train_dir = project_root / 'train'
+import importlib.util
 
-if str(train_dir) not in sys.path:
-    sys.path.insert(0, str(train_dir))
+def import_masked_goal_vit():
+    # Get the current file's directory and navigate to the vit.py file
+    current_file = pathlib.Path(__file__).resolve()
+    vit_path = current_file.parent.parent / 'vint' / 'vit.py'
+    
+    # Load the vit.py module dynamically
+    spec = importlib.util.spec_from_file_location("vit", str(vit_path))
+    vit_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(vit_module)
+    
+    # Return the MaskedGoalViT class
+    return vit_module.MaskedGoalViT
 
-# Import MaskedGoalViT
-from train.vint_train.models.vint.vit import MaskedGoalViT
+MaskedGoalViT = import_masked_goal_vit()
 
 class ViTHierarchicalEncoder(nn.Module):
     def __init__(
