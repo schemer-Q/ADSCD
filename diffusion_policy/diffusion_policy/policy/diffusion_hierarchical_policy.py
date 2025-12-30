@@ -326,14 +326,14 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
         goal_img = obs_dict['goal_img'].detach()
         adv_mask = obs_dict.get('adv_mask', None)
         
-        # Generate navigation intent (fixed during optimization)
+        # Generate navigation and adversarial intent distributions
         z_nav_mean, z_nav_logvar, z_adv_mean, z_adv_logvar = self.vit_encoder(obs_img, goal_img, adv_mask)
-        z_nav = self.vit_encoder.sample(z_nav_mean, z_nav_logvar, deterministic=True)
-        z_nav = z_nav.detach()  # Fix navigation intent
-        
-        # Initialize adversarial intent as learnable parameter
-        z_adv = self.vit_encoder.sample(z_adv_mean, z_adv_logvar, deterministic=True)
-        z_adv = z_adv.detach().requires_grad_(True)
+
+        # For deterministic optimization we use the distribution means directly
+        z_nav = z_nav_mean.detach()  # Fix navigation intent
+
+        # Initialize adversarial intent as learnable parameter using its mean
+        z_adv = z_adv_mean.detach().requires_grad_(True)
         
         # Optimizer for z_adv
         optimizer = torch.optim.Adam([z_adv], lr=lr)
