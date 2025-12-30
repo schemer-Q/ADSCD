@@ -37,7 +37,6 @@ except Exception:
     else:
         # re-raise original error if file not found
         raise
-    from train.vint_train.models.vae.vit_hierarchical_encoder import ViTHierarchicalEncoder
 
 class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
     def __init__(self, 
