@@ -218,8 +218,12 @@ class MaskedGoalViT(nn.Module):
             final_mask = F.interpolate(final_mask.unsqueeze(1), size=x.shape[1], mode='nearest').squeeze(1)
         
         # Ensure final_mask has correct embedding dimension for broadcasting
-        if final_mask.shape[-1] != x.shape[-1]:
+        if final_mask.shape[-1] == 1:
+            # If final_mask has single embedding dimension, expand it to match x
             final_mask = final_mask.expand(-1, -1, x.shape[-1])
+        elif final_mask.shape[-1] != x.shape[-1]:
+            # If dimensions don't match and final_mask has multiple dimensions, use interpolation
+            final_mask = F.interpolate(final_mask.unsqueeze(0), size=(x.shape[1], x.shape[2]), mode='nearest').squeeze(0)
         
         x = x * final_mask 
         x = x.mean(dim = 1)
