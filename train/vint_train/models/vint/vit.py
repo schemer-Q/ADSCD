@@ -114,6 +114,12 @@ class Attention(nn.Module):
         dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
         if len(mask.shape) == 3:
             mask = mask.unsqueeze(1)
+        
+        # Debug: check tensor dimensions
+        print(f"dots shape: {dots.shape}")
+        print(f"mask shape: {mask.shape}")
+        print(f"heads: {self.heads}")
+        
         attn = self.attend(dots + mask) 
         out = torch.matmul(attn, v)
         out = rearrange(out, 'b h n d -> b n (h d)')
