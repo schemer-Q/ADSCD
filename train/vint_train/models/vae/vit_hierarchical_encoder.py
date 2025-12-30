@@ -1,60 +1,20 @@
+import sys
 import torch
 from torch import nn
 from einops import rearrange
 from typing import Optional, Tuple
-# Robust import for MaskedGoalViT: try normal import first; if it fails
-# (e.g., running script from repo root where 'train' package isn't on sys.path),
-# add project root and train dir to sys.path and retry.
-# try:
-    # Robust import for MaskedGoalViT: try normal import first; if it fails
-# (e.g., running script from repo root where 'train' package isn't on sys.path),
-# add project root and train dir to sys.path and retry.
-try:
-    from train.vint_train.models.vint.vit import MaskedGoalViT
-except Exception:
-    import sys
-    import pathlib
-    import importlib.util
-    this_file = pathlib.Path(__file__).resolve()
-    # ADSCD project root is three levels up from this file
-    project_root = this_file.parent.parent.parent.parent
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
 
-    # Try to locate the vit file directly to avoid shadowing by files named
-    # 'train.py' on sys.path. Build the expected file path and import it as a
-    # module via importlib if present.
-    vit_path = project_root / 'train' / 'vint_train' / 'models' / 'vint' / 'vit.py'
-    if vit_path.exists():
-        spec = importlib.util.spec_from_file_location("vit", str(vit_path))
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        MaskedGoalViT = module.MaskedGoalViT
-    else:
-        # re-raise original error if file not found
-        raise
-except Exception:
-    import sys
-    import pathlib
-    import importlib.util
-    this_file = pathlib.Path(__file__).resolve()
-    # ADSCD project root is three levels up from this file
-    project_root = this_file.parent.parent.parent.parent
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
+# Add train directory to path for imports
+import pathlib
+this_file = pathlib.Path(__file__).resolve()
+project_root = this_file.parent.parent.parent.parent
+train_dir = project_root / 'train'
 
-    # Try to locate the vit file directly to avoid shadowing by files named
-    # 'train.py' on sys.path. Build the expected file path and import it as a
-    # module via importlib if present.
-    vit_path = project_root / 'train' / 'vint_train' / 'models' / 'vint' / 'vit.py'
-    if vit_path.exists():
-        spec = importlib.util.spec_from_file_location("vit", str(vit_path))
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        MaskedGoalViT = module.MaskedGoalViT
-    else:
-        # re-raise original error if file not found
-        raise
+if str(train_dir) not in sys.path:
+    sys.path.insert(0, str(train_dir))
+
+# Import MaskedGoalViT
+from train.vint_train.models.vint.vit import MaskedGoalViT
 
 class ViTHierarchicalEncoder(nn.Module):
     def __init__(
