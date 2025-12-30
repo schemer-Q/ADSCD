@@ -47,9 +47,9 @@ policy:
 
   model:
     _target_: diffusion_policy.model.diffusion.conditional_unet1d.ConditionalUnet1D
-    input_dim: "${eval: ${task.action_dim} if ${obs_as_local_cond} or ${obs_as_global_cond} else ${task.obs_dim} + ${task.action_dim}}"
-    local_cond_dim: "${eval: ${task.obs_dim} if ${obs_as_local_cond} else None}"
-    global_cond_dim: "${eval: ${latent_dim} + (${task.obs_dim}*${n_obs_steps} if ${obs_as_global_cond} else 0)}"  # Latent + low-dim obs
+    input_dim: ${task.action_dim}  # Simplified: action dimension only
+    local_cond_dim: ${task.obs_dim}  # Simplified: observation dimension
+    global_cond_dim: ${eval: ${latent_dim} + ${task.obs_dim}*${n_obs_steps}}  # Latent + low-dim obs
     diffusion_step_embed_dim: 256
     down_dims: [256, 512, 1024]
     kernel_size: 5
@@ -71,7 +71,7 @@ policy:
   horizon: ${horizon}
   obs_dim: ${obs_dim}
   action_dim: ${action_dim}
-  n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
+  n_action_steps: ${n_action_steps}  # Simplified: ignore latency steps
   n_obs_steps: ${n_obs_steps}
   num_inference_steps: 100
   obs_as_local_cond: ${obs_as_local_cond}
