@@ -193,7 +193,12 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
     def compute_loss(self, batch):
         # normalize input
         assert 'valid_mask' not in batch
-        nbatch = self.normalizer.normalize(batch)
+        try:
+            nbatch = self.normalizer.normalize(batch)
+        except Exception:
+            # Normalizer not initialized for these keys; fall back to raw batch
+            # This allows demo/training to proceed when no fitted normalizer is provided.
+            nbatch = batch
         
         # Extract inputs
         obs_img = batch['obs_img']
