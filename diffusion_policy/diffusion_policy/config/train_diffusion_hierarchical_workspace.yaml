@@ -49,7 +49,7 @@ policy:
     _target_: diffusion_policy.model.diffusion.conditional_unet1d.ConditionalUnet1D
     input_dim: ${task.action_dim}  # Simplified: action dimension only
     local_cond_dim: ${task.obs_dim}  # Simplified: observation dimension
-    global_cond_dim: ${latent_dim}  # Simplified: use latent dimension only
+    global_cond_dim: ${eval:'${latent_dim} + ${n_obs_steps}*${obs_dim}'}  # Total dimension: latent + flattened obs
     diffusion_step_embed_dim: 256
     down_dims: [256, 512, 1024]
     kernel_size: 5
