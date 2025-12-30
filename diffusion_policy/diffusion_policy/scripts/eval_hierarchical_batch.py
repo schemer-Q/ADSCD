@@ -13,12 +13,21 @@ import argparse
 import time
 import pathlib
 import os
+import sys
 import csv
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
 import hydra
 from omegaconf import OmegaConf
+
+# Ensure project root and package dirs are on sys.path (same approach as demo)
+current_file = pathlib.Path(__file__).resolve()
+project_root = current_file.parent.parent.parent
+sys.path.append(str(project_root))
+sys.path.append(str(project_root / 'diffusion_policy'))
+sys.path.append(str(project_root / 'train'))
+
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 
 
