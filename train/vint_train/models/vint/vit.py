@@ -9,7 +9,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import List, Dict, Optional, Tuple
-from vit_pytorch import SimpleViT
 import pdb
 
 

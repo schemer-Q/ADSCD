@@ -24,3 +24,4 @@ dependencies:
   #   - ray[default,tune]==2.2.0
   #   - opencv-python==4.6.0.66
   #   - tensorboard>=2.11.0
+  #    conda install -c conda-forge vit-pytorch
