@@ -211,6 +211,12 @@ class MaskedGoalViT(nn.Module):
 
         x = self.transformer(x, mask=final_mask)
         final_mask = torch.index_select(self.mean_mask.to(device), 0, input_goal_mask.to(device)).unsqueeze(-1)
+        
+        # Ensure final_mask has correct sequence length
+        if final_mask.shape[1] != x.shape[1]:
+            # Resize final_mask to match x sequence length
+            final_mask = F.interpolate(final_mask.unsqueeze(1), size=x.shape[1], mode='nearest').squeeze(1)
+        
         x = x * final_mask 
         x = x.mean(dim = 1)
 
