@@ -69,7 +69,9 @@ def main(args):
     config_path = current_file.parent.parent / 'config'
     cfg_name = 'train_diffusion_hierarchical_workspace'
 
-    with hydra.initialize_config_dir(config_dir=str(config_path)):
+    # Register 'eval' resolver (some configs use ${eval:...})
+    OmegaConf.register_new_resolver("eval", eval, replace=True)
+    with hydra.initialize_config_dir(config_dir=str(config_path), version_base=None):
         cfg = hydra.compose(config_name=cfg_name)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
