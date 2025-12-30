@@ -198,6 +198,13 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
         z_nav_mean, z_nav_logvar, z_adv_mean, z_adv_logvar = self.vit_encoder(obs_img, goal_img, adv_mask)
         z = self.vit_encoder.sample(z_nav_mean, z_nav_logvar, z_adv_mean, z_adv_logvar, adv_mask)
         
+        # Ensure z is on the same device as the policy
+        z = z.to(self.device)
+        z_nav_mean = z_nav_mean.to(self.device)
+        z_nav_logvar = z_nav_logvar.to(self.device)
+        z_adv_mean = z_adv_mean.to(self.device)
+        z_adv_logvar = z_adv_logvar.to(self.device)
+        
         # Normalize low-dimensional observations if provided
         nobs = None
         if 'obs' in obs_dict:
@@ -284,6 +291,13 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
         # Generate hierarchical latent distribution from visual inputs
         z_nav_mean, z_nav_logvar, z_adv_mean, z_adv_logvar = self.vit_encoder(obs_img, goal_img, adv_mask)
         z = self.vit_encoder.sample(z_nav_mean, z_nav_logvar, z_adv_mean, z_adv_logvar, adv_mask)
+        
+        # Ensure z is on the same device as the policy
+        z = z.to(self.device)
+        z_nav_mean = z_nav_mean.to(self.device)
+        z_nav_logvar = z_nav_logvar.to(self.device)
+        z_adv_mean = z_adv_mean.to(self.device)
+        z_adv_logvar = z_adv_logvar.to(self.device)
         
         # Compute KL divergence losses with condition mask
         # Navigation intent KL loss (always active)
@@ -409,6 +423,12 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
         
         # Generate navigation and adversarial intent distributions
         z_nav_mean, z_nav_logvar, z_adv_mean, z_adv_logvar = self.vit_encoder(obs_img, goal_img, adv_mask)
+        
+        # Ensure tensors are on the same device as the policy
+        z_nav_mean = z_nav_mean.to(self.device)
+        z_nav_logvar = z_nav_logvar.to(self.device)
+        z_adv_mean = z_adv_mean.to(self.device)
+        z_adv_logvar = z_adv_logvar.to(self.device)
 
         # For deterministic optimization we use the distribution means directly
         z_nav = z_nav_mean.detach()  # Fix navigation intent
