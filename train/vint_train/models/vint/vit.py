@@ -112,8 +112,19 @@ class Attention(nn.Module):
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = self.heads), qkv)
 
         dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+        
+        # Ensure mask has correct dimensions
         if len(mask.shape) == 3:
-            mask = mask.unsqueeze(1)
+            mask = mask.unsqueeze(1)  # Add head dimension
+        
+        # Expand mask to match dots dimensions
+        if mask.shape[1] == 1 and mask.shape[1] != dots.shape[1]:
+            mask = mask.expand(-1, dots.shape[1], -1, -1)  # Expand head dimension
+        
+        # Ensure sequence length matches
+        if mask.shape[-1] != dots.shape[-1]:
+            # Resize mask to match dots sequence length
+            mask = F.interpolate(mask, size=dots.shape[-1], mode='nearest')
         
         # Debug: check tensor dimensions
         print(f"dots shape: {dots.shape}")
