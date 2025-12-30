@@ -23,10 +23,18 @@ from omegaconf import OmegaConf
 
 # Ensure project root is on sys.path (avoid adding package subdirs to prevent
 # name collisions like diffusion_policy/train.py shadowing the train package).
+import sys
+import os
+
 current_file = pathlib.Path(__file__).resolve()
 project_root = current_file.parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
+
+# Add train directory to sys.path for imports
+train_dir = os.path.join(project_root, 'train')
+if train_dir not in sys.path:
+    sys.path.insert(0, train_dir)
 
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 
