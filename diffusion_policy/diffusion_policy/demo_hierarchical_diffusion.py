@@ -211,16 +211,25 @@ def demo_hierarchical_diffusion():
     
     # For demonstration purposes, let's create ground truth actions
     gt_action = action[0].detach().cpu().numpy()
-    
+
     # Get predicted actions
     pred_action_disabled = result_disabled['action'][0].detach().cpu().numpy()
     pred_action_enabled = result_enabled['action'][0].detach().cpu().numpy()
     pred_action_optimized = result_optimized['action'][0].detach().cpu().numpy()
-    
-    # Calculate MSE errors
-    mse_disabled = np.mean((gt_action - pred_action_disabled) ** 2)
-    mse_enabled = np.mean((gt_action - pred_action_enabled) ** 2)
-    mse_optimized = np.mean((gt_action - pred_action_optimized) ** 2)
+
+    # Align sequences to the minimum length before comparison
+    def _align_sequences(a, b):
+        L = min(a.shape[0], b.shape[0])
+        return a[:L], b[:L]
+
+    gt_d, pred_d = _align_sequences(gt_action, pred_action_disabled)
+    gt_e, pred_e = _align_sequences(gt_action, pred_action_enabled)
+    gt_o, pred_o = _align_sequences(gt_action, pred_action_optimized)
+
+    # Calculate MSE errors on aligned sequences
+    mse_disabled = np.mean((gt_d - pred_d) ** 2)
+    mse_enabled = np.mean((gt_e - pred_e) ** 2)
+    mse_optimized = np.mean((gt_o - pred_o) ** 2)
     
     print(f"MSE (Disabled Adversarial): {mse_disabled:.6f}")
     print(f"MSE (Enabled Adversarial): {mse_enabled:.6f}")
@@ -229,9 +238,9 @@ def demo_hierarchical_diffusion():
     # Visualize trajectories (optional, comment out if not needed)
     print("\n=== Visualizing Trajectories ===")
     try:
-        fig1 = visualize_trajectory(gt_action, pred_action_disabled, "Trajectory Comparison (Adversarial Disabled)")
-        fig2 = visualize_trajectory(gt_action, pred_action_enabled, "Trajectory Comparison (Adversarial Enabled)")
-        fig3 = visualize_trajectory(gt_action, pred_action_optimized, "Trajectory Comparison (Adversarial Optimized)")
+        fig1 = visualize_trajectory(gt_d, pred_d, "Trajectory Comparison (Adversarial Disabled)")
+        fig2 = visualize_trajectory(gt_e, pred_e, "Trajectory Comparison (Adversarial Enabled)")
+        fig3 = visualize_trajectory(gt_o, pred_o, "Trajectory Comparison (Adversarial Optimized)")
         
         # Save figures
         output_dir = pathlib.Path("demo_output")
