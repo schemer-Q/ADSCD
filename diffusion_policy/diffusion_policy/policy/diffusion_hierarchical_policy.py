@@ -38,6 +38,55 @@ except Exception:
         # re-raise original error if file not found
         raise
 
+# Wrapper class that Hydra can instantiate to create ViTHierarchicalEncoder
+class ViTHierarchicalEncoderWrapper:
+    def __new__(cls, 
+                obs_encoding_size=512,
+                context_size=5,
+                image_size=128,
+                patch_size=16,
+                mha_num_attention_heads=4,
+                mha_num_attention_layers=4,
+                latent_dim_nav=64,
+                latent_dim_adv=32):
+        # Import the actual class using the robust import mechanism
+        try:
+            from train.vint_train.models.vae.vit_hierarchical_encoder import ViTHierarchicalEncoder
+        except Exception:
+            import sys
+            import pathlib
+            import importlib.util
+            this_file = pathlib.Path(__file__).resolve()
+            # ADSCD project root is three levels up from this file
+            project_root = this_file.parent.parent.parent.parent
+            if str(project_root) not in sys.path:
+                sys.path.insert(0, str(project_root))
+
+            # Try to locate the encoder file directly to avoid shadowing by files named
+            # 'train.py' on sys.path. Build the expected file path and import it as a
+            # module via importlib if present.
+            encoder_path = project_root / 'train' / 'vint_train' / 'models' / 'vae' / 'vit_hierarchical_encoder.py'
+            if encoder_path.exists():
+                spec = importlib.util.spec_from_file_location("vit_hierarchical_encoder", str(encoder_path))
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                ViTHierarchicalEncoder = module.ViTHierarchicalEncoder
+            else:
+                # re-raise original error if file not found
+                raise
+        
+        # Create and return an instance of the actual ViTHierarchicalEncoder
+        return ViTHierarchicalEncoder(
+            obs_encoding_size=obs_encoding_size,
+            context_size=context_size,
+            image_size=image_size,
+            patch_size=patch_size,
+            mha_num_attention_heads=mha_num_attention_heads,
+            mha_num_attention_layers=mha_num_attention_layers,
+            latent_dim_nav=latent_dim_nav,
+            latent_dim_adv=latent_dim_adv
+        )
+
 class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
     def __init__(self, 
             model: ConditionalUnet1D,

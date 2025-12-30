@@ -32,7 +32,7 @@ kl_weight_adv: 1.0  # Weight for adversarial intent KL loss
 
 # ViT Hierarchical Encoder configuration
 vit_encoder:
-  _target_: train.vint_train.models.vae.vit_hierarchical_encoder.ViTHierarchicalEncoder
+  _target_: diffusion_policy.policy.diffusion_hierarchical_policy.ViTHierarchicalEncoderWrapper
   obs_encoding_size: 512
   context_size: 5
   image_size: 128
