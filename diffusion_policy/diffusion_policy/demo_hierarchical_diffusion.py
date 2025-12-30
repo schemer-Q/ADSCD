@@ -83,8 +83,10 @@ def demo_hierarchical_diffusion():
     Demo script for hierarchical diffusion policy with adversarial interaction
     """
     # Load configuration
-    config_path = pathlib.Path(__file__).parent.parent / 'config'
+    config_path = pathlib.Path(__file__).parent / 'config'
     config_name = 'train_diffusion_hierarchical_workspace'
+    print(f"Config path: {config_path}")
+    print(f"Config exists: {config_path.exists()}")
     
     with hydra.initialize_config_dir(config_dir=str(config_path)):
         cfg = hydra.compose(config_name=config_name)
