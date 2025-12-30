@@ -567,6 +567,8 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
             if 'obs' in obs_dict:
                 if self.obs_as_global_cond:
                     obs_flat = nobs[:,:self.n_obs_steps,:].reshape(nobs.shape[0], -1)
+                    # Ensure obs_flat is on the same device as z
+                    obs_flat = obs_flat.to(z.device)
                     global_cond = torch.cat([z, obs_flat], dim=-1)
             
             # Generate final action trajectory
