@@ -106,6 +106,10 @@ def demo_hierarchical_diffusion():
     policy.to(device)
     policy.eval()
     
+    # Create dummy data for testing
+    print("\n=== Creating Dummy Data ===")
+    batch_size = 2
+    
     # Initialize normalizer with dummy data
     print("Initializing normalizer...")
     from diffusion_policy.model.common.normalizer import LinearNormalizer
@@ -122,10 +126,6 @@ def demo_hierarchical_diffusion():
     print("Model initialized successfully!")
     print(f"Policy type: {type(policy).__name__}")
     print(f"Encoder type: {type(policy.vit_encoder).__name__}")
-    
-    # Create dummy data for testing
-    print("\n=== Creating Dummy Data ===")
-    batch_size = 2
     
     # Dummy observation and goal images
     context_size = cfg.vit_encoder.context_size
