@@ -350,56 +350,93 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
         device = self.device
         dtype = self.dtype
         
-        # Optimization loop
-        for step in range(num_steps):
-            optimizer.zero_grad()
-            
-            # Apply mask to adversarial intent
-            if adv_mask is not None:
-                z_adv_masked = z_adv * adv_mask.view(-1, 1)
-            else:
-                z_adv_masked = z_adv
-            
-            # Concatenate navigation and adversarial intent
-            z = torch.cat([z_nav, z_adv_masked], dim=-1)
-            
-            # Prepare diffusion model inputs
+        def _compute_action_pred_from_z(z_tensor):
+            """Helper: given full z (nav+adv), run conditional_sample and return unnormalized action_pred."""
             local_cond = None
-            global_cond = z
-            
-            if 'obs' in obs_dict:
-                if self.obs_as_global_cond:
-                    obs_flat = nobs[:,:self.n_obs_steps,:].reshape(nobs.shape[0], -1)
-                    global_cond = torch.cat([z, obs_flat], dim=-1)
-            
-            # Generate action trajectory using current z
+            global_cond = z_tensor
+            if 'obs' in obs_dict and self.obs_as_global_cond:
+                obs_flat = nobs[:,:self.n_obs_steps,:].reshape(nobs.shape[0], -1)
+                global_cond = torch.cat([z_tensor, obs_flat], dim=-1)
+
             shape = (B, T, Da)
             if self.pred_action_steps_only:
                 shape = (B, self.n_action_steps, Da)
             cond_data = torch.zeros(size=shape, device=device, dtype=dtype)
             cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
-            
-            # Sample trajectory
+
             nsample = self.conditional_sample(
                 cond_data, cond_mask,
                 local_cond=local_cond,
                 global_cond=global_cond,
                 **self.kwargs)
-            
-            # Unnormalize action
+
             naction_pred = nsample[...,:Da]
             action_pred = self.normalizer['action'].unnormalize(naction_pred)
-            
-            # TODO: Define adversarial loss function here
-            # For example, you could use a loss that maximizes the distance to opponent's position
-            # or minimizes the opponent's success rate
-            
-            # For demo purposes, we'll use a simple loss that encourages adversarial behavior
-            # This should be replaced with a task-specific adversarial loss
-            adv_loss = -torch.mean(action_pred)  # Example: encourage larger actions
-            
+            return action_pred
+
+        use_fd = False
+        for step in range(num_steps):
+            # Apply mask to adversarial intent
+            if adv_mask is not None:
+                z_adv_masked = z_adv * adv_mask.view(-1, 1)
+            else:
+                z_adv_masked = z_adv
+
+            # Concatenate navigation and adversarial intent
+            z = torch.cat([z_nav, z_adv_masked], dim=-1)
+
+            # Compute action prediction for current z
+            action_pred = _compute_action_pred_from_z(z)
+
+            # Simple adversarial loss (replace with task-specific loss)
+            adv_loss = -torch.mean(action_pred)
+
+            # If adv_loss does not require grad (sampling path not differentiable),
+            # fall back to finite-difference optimization
+            if not adv_loss.requires_grad:
+                use_fd = True
+                break
+
+            # Otherwise use gradient-based update
+            optimizer.zero_grad()
             adv_loss.backward()
             optimizer.step()
+
+        if use_fd:
+            # Finite-difference numerical gradient optimization over z_adv
+            eps = 1e-3
+            for step in range(num_steps):
+                grads = torch.zeros_like(z_adv)
+                for i in range(z_adv.shape[1]):
+                    z_plus = z_adv.clone()
+                    z_minus = z_adv.clone()
+                    z_plus[:, i] = z_plus[:, i] + eps
+                    z_minus[:, i] = z_minus[:, i] - eps
+
+                    if adv_mask is not None:
+                        z_plus_masked = z_plus * adv_mask.view(-1,1)
+                        z_minus_masked = z_minus * adv_mask.view(-1,1)
+                    else:
+                        z_plus_masked = z_plus
+                        z_minus_masked = z_minus
+
+                    z_full_plus = torch.cat([z_nav, z_plus_masked], dim=-1)
+                    z_full_minus = torch.cat([z_nav, z_minus_masked], dim=-1)
+
+                    action_plus = _compute_action_pred_from_z(z_full_plus)
+                    action_minus = _compute_action_pred_from_z(z_full_minus)
+
+                    loss_plus = -torch.mean(action_plus)
+                    loss_minus = -torch.mean(action_minus)
+
+                    # central difference
+                    grad_i = (loss_plus - loss_minus) / (2 * eps)
+                    # assign same gradient for all batch entries
+                    grads[:, i] = grad_i.detach()
+
+                # gradient ascent (we maximize adv objective here)
+                with torch.no_grad():
+                    z_adv += lr * grads
         
         # Get final optimized action
         with torch.no_grad():
