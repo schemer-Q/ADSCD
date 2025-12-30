@@ -106,6 +106,19 @@ def demo_hierarchical_diffusion():
     policy.to(device)
     policy.eval()
     
+    # Initialize normalizer with dummy data
+    print("Initializing normalizer...")
+    from diffusion_policy.model.common.normalizer import LinearNormalizer
+    normalizer = LinearNormalizer()
+    
+    # Fit normalizer with dummy data matching the expected input shapes
+    dummy_batch = {
+        'obs': torch.randn(batch_size, cfg.horizon, cfg.obs_dim),
+        'action': torch.randn(batch_size, cfg.horizon, cfg.action_dim)
+    }
+    normalizer.fit(dummy_batch)
+    policy.set_normalizer(normalizer)
+    
     print("Model initialized successfully!")
     print(f"Policy type: {type(policy).__name__}")
     print(f"Encoder type: {type(policy.vit_encoder).__name__}")
