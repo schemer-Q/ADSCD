@@ -21,12 +21,12 @@ import matplotlib.pyplot as plt
 import hydra
 from omegaconf import OmegaConf
 
-# Ensure project root and package dirs are on sys.path (same approach as demo)
+# Ensure project root is on sys.path (avoid adding package subdirs to prevent
+# name collisions like diffusion_policy/train.py shadowing the train package).
 current_file = pathlib.Path(__file__).resolve()
 project_root = current_file.parent.parent.parent
-sys.path.append(str(project_root))
-sys.path.append(str(project_root / 'diffusion_policy'))
-sys.path.append(str(project_root / 'train'))
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 from diffusion_policy.model.common.normalizer import LinearNormalizer
 
