@@ -227,6 +227,8 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
             if self.obs_as_global_cond:
                 # Concatenate latent z with flattened observations
                 obs_flat = nobs[:,:self.n_obs_steps,:].reshape(nobs.shape[0], -1)
+                # Ensure obs_flat is on the same device as z
+                obs_flat = obs_flat.to(z.device)
                 global_cond = torch.cat([z, obs_flat], dim=-1)
 
         # Prepare condition data and mask
@@ -331,6 +333,8 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
             elif self.obs_as_global_cond:
                 # Concatenate latent z with flattened observations
                 obs_flat = obs[:,:self.n_obs_steps,:].reshape(obs.shape[0], -1)
+                # Ensure obs_flat is on the same device as z
+                obs_flat = obs_flat.to(z.device)
                 global_cond = torch.cat([z, obs_flat], dim=-1)
                 
                 if self.pred_action_steps_only:
@@ -457,6 +461,8 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
             global_cond = z_tensor
             if 'obs' in obs_dict and self.obs_as_global_cond:
                 obs_flat = nobs[:,:self.n_obs_steps,:].reshape(nobs.shape[0], -1)
+                # Ensure obs_flat is on the same device as z_tensor
+                obs_flat = obs_flat.to(z_tensor.device)
                 global_cond = torch.cat([z_tensor, obs_flat], dim=-1)
 
             shape = (B, T, Da)
@@ -484,6 +490,7 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
                 z_adv_masked = z_adv
 
             # Concatenate navigation and adversarial intent
+            z_adv_masked = z_adv_masked.to(z_nav.device)
             z = torch.cat([z_nav, z_adv_masked], dim=-1)
 
             # Compute action prediction for current z
@@ -521,7 +528,9 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
                         z_plus_masked = z_plus
                         z_minus_masked = z_minus
 
+                    z_plus_masked = z_plus_masked.to(z_nav.device)
                     z_full_plus = torch.cat([z_nav, z_plus_masked], dim=-1)
+                    z_minus_masked = z_minus_masked.to(z_nav.device)
                     z_full_minus = torch.cat([z_nav, z_minus_masked], dim=-1)
 
                     action_plus = _compute_action_pred_from_z(z_full_plus)
@@ -548,6 +557,7 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
                 z_adv_masked = z_adv
             
             # Concatenate navigation and adversarial intent
+            z_adv_masked = z_adv_masked.to(z_nav.device)
             z = torch.cat([z_nav, z_adv_masked], dim=-1)
             
             # Prepare diffusion model inputs
