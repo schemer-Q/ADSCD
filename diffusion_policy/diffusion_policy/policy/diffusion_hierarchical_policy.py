@@ -9,7 +9,21 @@ from diffusion_policy.model.common.normalizer import LinearNormalizer
 from diffusion_policy.policy.base_lowdim_policy import BaseLowdimPolicy
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 from diffusion_policy.model.diffusion.mask_generator import LowdimMaskGenerator
-from train.vint_train.models.vae.vit_hierarchical_encoder import ViTHierarchicalEncoder
+
+# Robust import for ViTHierarchicalEncoder: try normal import first; if it fails
+# (e.g., running script from repo root where 'train' package isn't on sys.path),
+# add project root and train dir to sys.path and retry.
+try:
+    from train.vint_train.models.vae.vit_hierarchical_encoder import ViTHierarchicalEncoder
+except Exception:
+    import sys
+    import pathlib
+    this_file = pathlib.Path(__file__).resolve()
+    # ADSCD project root is three levels up from this file
+    project_root = this_file.parent.parent.parent.parent
+    sys.path.insert(0, str(project_root))
+    sys.path.insert(0, str(project_root / 'train'))
+    from train.vint_train.models.vae.vit_hierarchical_encoder import ViTHierarchicalEncoder
 
 class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
     def __init__(self, 
