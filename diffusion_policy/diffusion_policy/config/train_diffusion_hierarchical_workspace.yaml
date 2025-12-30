@@ -24,7 +24,7 @@ pred_action_steps_only: False
 # Hierarchical latent space parameters
 latent_dim_nav: 64  # Navigation intent dimension
 latent_dim_adv: 32  # Adversarial intent dimension
-latent_dim: ${eval: ${latent_dim_nav} + ${latent_dim_adv}}  # Total latent dimension
+latent_dim: 96  # Total latent dimension (64 + 32)
 
 # KL loss weights
 kl_weight: 1.0      # Weight for navigation intent KL loss
