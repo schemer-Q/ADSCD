@@ -117,8 +117,8 @@ def demo_hierarchical_diffusion():
     
     # Fit normalizer with dummy data matching the expected input shapes
     dummy_batch = {
-        'obs': torch.randn(batch_size, cfg.horizon, cfg.obs_dim),
-        'action': torch.randn(batch_size, cfg.horizon, cfg.action_dim)
+        'obs': torch.randn(batch_size, cfg.horizon, cfg.obs_dim, device=device),
+        'action': torch.randn(batch_size, cfg.horizon, cfg.action_dim, device=device)
     }
     normalizer.fit(dummy_batch)
     policy.set_normalizer(normalizer)
