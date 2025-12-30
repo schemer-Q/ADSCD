@@ -18,11 +18,25 @@ try:
 except Exception:
     import sys
     import pathlib
+    import importlib.util
     this_file = pathlib.Path(__file__).resolve()
     # ADSCD project root is three levels up from this file
     project_root = this_file.parent.parent.parent.parent
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
+
+    # Try to locate the encoder file directly to avoid shadowing by files named
+    # 'train.py' on sys.path. Build the expected file path and import it as a
+    # module via importlib if present.
+    encoder_path = project_root / 'train' / 'vint_train' / 'models' / 'vae' / 'vit_hierarchical_encoder.py'
+    if encoder_path.exists():
+        spec = importlib.util.spec_from_file_location("vit_hierarchical_encoder", str(encoder_path))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        ViTHierarchicalEncoder = module.ViTHierarchicalEncoder
+    else:
+        # re-raise original error if file not found
+        raise
     from train.vint_train.models.vae.vit_hierarchical_encoder import ViTHierarchicalEncoder
 
 class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
