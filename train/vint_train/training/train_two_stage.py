@@ -8,10 +8,17 @@
 """
 import argparse
 import os
+import sys
 import yaml
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+
+# Ensure project root is on sys.path so imports like `vint_train` resolve
+# Project root is three levels up from this script: train/vint_train/training
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from vint_train.training.train_utils import (
     normalize_data,
