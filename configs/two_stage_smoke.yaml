@@ -1,0 +1,14 @@
+ckpt: "e:/Code Examples/nomad_dp/ADSCD/checkpoints/dummy_ema.pth"
+data_dir: "e:/Code Examples/nomad_dp/ADSCD/data"
+data_sample: null
+batch_size: 1
+epochs: 1
+steps: 10
+lr: 0.01
+z1_dim: 256
+z2_dim: 128
+obs_encoding_size: 512
+context_size: 5
+image_size: 128
+patch_size: 16
+out_z2: "z2_optimized.pt"
