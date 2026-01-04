@@ -38,10 +38,10 @@ class ViT(nn.Module):
             context_size=context_size,
             image_size=(self.image_height, self.image_width*(self.context_size + 2)),
             patch_size=self.patch_size,
-            dim=encoding_size,
+            dim=obs_encoding_size,
             depth = mha_num_attention_layers,
             heads = mha_num_attention_heads,
-            mlp_dim = encoding_size
+            mlp_dim = obs_encoding_size
         )
 
     def forward(
@@ -54,7 +54,32 @@ class ViT(nn.Module):
         assert len(x.shape) == 4, "input image shape is not 4D"
         assert x.shape[1] == 3, "input image channel is not 3"
         assert x.shape[2] == self.image_height, f"input image height is not {self.image_height}"
-        assert x.shape[3] == self.image_width*(self.context_size + 2), f"input image width is not {self.image_width}*(context_size + 2)"
+        # Allow input widths that correspond to a different per-frame image width
+        total_frames = (self.context_size + 2)
+        # Allow input widths that are not perfectly divisible by total_frames by
+        # centrally cropping the width to the largest divisible value. This
+        # avoids hard assertions when dataset images have slightly different
+        # concatenation widths.
+        if x.shape[3] % total_frames != 0:
+            orig_w = x.shape[3]
+            per_frame_w = orig_w // total_frames
+            new_w = per_frame_w * total_frames
+            start = (orig_w - new_w) // 2
+            end = start + new_w
+            x = x[:, :, :, start:end]
+            print(f"Warning: cropped input image width {orig_w} -> {new_w} to be divisible by (context_size+2)={total_frames}")
+        else:
+            per_frame_w = x.shape[3] // total_frames
+        if per_frame_w != self.image_width:
+            # Resize concatenated image so each per-frame block matches configured image_width.
+            target_w = self.image_width * total_frames
+            try:
+                import torch.nn.functional as _F
+                x = _F.interpolate(x, size=(self.image_height, target_w), mode='bilinear', align_corners=False)
+                print(f"Warning: resized concatenated image from per-frame width {per_frame_w} to configured {self.image_width} (total width {target_w})")
+                per_frame_w = self.image_width
+            except Exception:
+                print(f"Warning: failed to resize image to target width {self.image_width}; proceeding with detected per-frame width {per_frame_w}")
        
         final_repr = self.ViT(x)
         

@@ -1,1 +1,16 @@
 *.png
+*.log
+*.pth
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
+datasets/
+demo_eval/
+demo_output/
+checkpoint/
+
+core.43023
+core.43990
+core.44179
+env.md
+conda_env_activator.sh
