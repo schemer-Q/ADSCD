@@ -1,5 +1,20 @@
-ckpt: "e:/Code Examples/nomad_dp/ADSCD/checkpoints/dummy_ema.pth"
-data_dir: "e:/Code Examples/nomad_dp/ADSCD/data"
+
+# Two-stage smoke test config
+# Either set `ckpt` to a packaged checkpoint file (contains ema_model/noise_scheduler)
+# or set `latest_pth`/`optimizer_pth`/`scheduler_pth` together with `train_config`.
+
+ckpt: null
+
+# Path to the original train config used to build the model when loading separate .pth files
+train_config: "/root/private_data/latent_diffusion_policy/ADSCD/train/config/nomad.yaml"
+
+# If you have the three files from previous training, set them here (relative or absolute paths)
+latest_pth: "/root/private_data/latent_diffusion_policy/ADSCD/checkpoint/latest.pth"           # e.g. logs/nomad/.../latest.pth
+optimizer_pth: "/root/private_data/latent_diffusion_policy/ADSCD/checkpoint/optimizer_pth.pth"         # e.g. logs/nomad/.../optimizer_latest.pth
+scheduler_pth: null        # e.g. logs/nomad/.../scheduler_latest.pth
+
+# Data and runtime
+data_dir: "~/private_data/latent_diffusion_policy/ADSCD/datasets/gazebo"
 data_sample: null
 batch_size: 1
 epochs: 1
