@@ -232,10 +232,14 @@ def comprehensive_benchmark():
     
     # Interpretation
     print("\nInterpretation:")
-    if dist_adv > dist_nav:
-        print("✅ Adversarial mode (g=1) successfully avoids the opponent more than Nav mode.")
+    print("Note: Adversarial Mode (g=1) is defined as generating interference/risky trajectories (Aggressive Interaction).")
+    
+    if dist_adv < dist_nav:
+        print("✅ Adversarial mode (g=1) results in closer proximity (potential interference) compared to Nav mode.")
+        print(f"   -> Distance reduced by {dist_nav - dist_adv:.4f}")
     else:
-        print("❓ Adversarial mode did not increase distance to opponent (Check dataset logic).")
+        print("❓ Adversarial mode did not decrease distance to opponent.")
+        print("   -> It might be behaving passively or the random inputs are dominating.")
         
     if abs(sr_nav - sr_adv) < 0.2:
         print("✅ Goal reaching capability is maintained in Adversarial mode.")
