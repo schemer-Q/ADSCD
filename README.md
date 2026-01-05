@@ -1,82 +1,237 @@
-**Adversarial Distribution Shaping via Conditional Diffusion**
+# README A: ACT-style 双编码器 + 扩散解码（Hierarchical Intent via Demonstration）
 
-NoMaD/
-├─ model.py / network.py       # 1. 修改 forward 接收 latent z，并拼接到条件向量 c
-├─ train.py / train_policy.py  # 2. 训练阶段采样 z、classifier-free 训练、loss 计算
-├─ sample.py / inference.py    # 3. 推理阶段 latent 初始化 + 可梯度优化 + CFG 修正
-├─ encoder.py                  # 4. 原始 encoder 保留，latent z 与条件拼接即可
-├─ config.yaml / args.py       # 5. 新增 z_dim, p_drop, lambda_cfg, latent_lr, latent_steps 等参数
-└─ critic.py (可选)            # 6. 风险评估模块，用于梯度指导 latent z
+## 1. 目标与动机
 
-**train.py**
-# === train.py ===
+本实现验证一种 **受 ACT 启发的双编码器串联架构**，用于在视觉导航中学习层次化意图，并通过潜变量优化生成对抗性轨迹。
 
-for step in range(num_steps):
-    # 1. 从数据集中采样
-    s, a_seq, c_goal = sample_batch(D)
+核心思想是：
 
-    # 2. 采样 diffusion timestep
-    t = random.randint(1, T)
+* 使用参考轨迹（demonstration / planner output）学习**高层策略意图**；
+* 将高层意图与当前观测结合，生成**可执行的低层意图**；
+* 使用 diffusion policy 在低层意图条件下生成轨迹。
 
-    # 3. 前向扩散，生成带噪动作
-    epsilon = torch.randn_like(a_seq)
-    x_t = sqrt_alpha[t] * a_seq + sqrt_1m_alpha[t] * epsilon
+该方案重点验证：
 
-    # 4. 采样 latent z
-    z = torch.randn(batch_size, z_dim).to(device)
+> 是否可以通过优化高层潜变量，在不直接操作 action 的情况下，系统性地产生多样化（含对抗性）的轨迹行为。
 
-    # 5. classifier-free 丢弃
-    if random() < p_drop:
-        z = None
-        c_goal = None
+---
 
-    # 6. 模型预测噪声
-    eps_hat = model(x_t, t, c_goal, z)   # forward 修改接收 z
+## 2. 方法概述
 
-    # 7. 计算扩散 loss
-    L_diff = F.mse_loss(eps_hat, epsilon)
+### 2.1 架构组成
 
-    # 8. 可选风险加权
-    w = compute_risk_weight(a_seq, s)   # 可选：TTC 或碰撞 indicator
-    L = (w * L_diff).mean()
+* **High-level Encoder `E_high`**
+  输入：历史观测 `o_{0:T}` + 参考轨迹 `τ_ref`
+  输出：高层潜在意图 `z₁`
 
-    # 9. 反向传播
-    optimizer.zero_grad()
-    L.backward()
-    optimizer.step()
+* **Low-level Encoder `E_low`**
+  输入：当前观测 `o_t` + `z₁`
+  输出：可执行潜变量 `z₂`
 
-**sample.py**
-# === sample.py ===
+* **Diffusion Trajectory Decoder `D_diff`**
+  条件：`z₂`（以及必要的视觉特征）
+  输出：未来轨迹 `τ`
 
-# 1. 当前状态与目标图像编码
-c_goal = encoder(obs, goal_image)
+整体流程：
 
-# 2. 初始化 latent z
-z = torch.randn(1, z_dim).to(device)
-z.requires_grad = True  # 如果要做梯度优化
+```
+(o_{0:T}, τ_ref) → E_high → z₁
+(o_t, z₁)       → E_low  → z₂
+(z₂, o_t)       → D_diff → τ
+```
 
-# 3. 可选 latent 优化（梯度上升）
-for step in range(latent_steps):
-    a_pred = diffusion_sample(s, c_goal, z)  # 反向扩散采样
-    risk = R_critic(a_pred, s)
-    grad_z = torch.autograd.grad(risk, z)[0]
-    z = z + latent_lr * grad_z
+---
 
-z_adv = z.detach()  # 优化完成，固定 z
+## 3. 训练逻辑
 
-# 4. 反向扩散生成动作序列（带 CFG）
-x_t = torch.randn(1, action_dim, T)  # 初始化噪声
-for t in reversed(range(1, T+1)):
-    eps_uncond = model(x_t, t, c_goal, None)
-    eps_cond   = model(x_t, t, c_goal, z_adv)
+### 3.1 训练阶段
 
-    # CFG 修正
-    eps_hat = eps_uncond + lambda_cfg * (eps_cond - eps_uncond)
+* 使用包含参考轨迹的数据集（专家演示 / 规划器输出）
+* 端到端训练 `E_high + E_low + D_diff`
+* 目标：最大化轨迹似然 / diffusion 去噪损失
 
-    # Denoise step
-    x_t = denoise_step(x_t, eps_hat, t)
+可选增强：
 
-a_adv = x_t  # 输出动作序列
+* 对 `τ_ref` 做 dropout（reference-free 训练）以缓解推理时分布偏移
+* 对 `z₁` 加正则或 KL 约束，限制潜空间
 
-# [关键点解释](image.png)
-# [与直接修改goal引导碰撞的思路对比](image-1.png)
+### 3.2 损失函数
+
+* Diffusion 去噪损失（主）
+* `z₁` 正则项（可选）
+* `z₂` 稳定性或信息约束（可选）
+
+---
+
+## 4. 推理与对抗生成
+
+### 4.1 推理阶段改动
+
+* **移除参考轨迹编码器输入**
+* 将 `z₁` 视为可优化变量（或从先验采样）
+
+### 4.2 对抗性轨迹生成
+
+* 固定当前观测 `o_t`
+* 通过梯度或采样方式优化 `z₁`
+* 目标函数示例：
+
+  * 诱发他人避让
+  * 减小他人安全裕度
+  * 增加交互不确定性
+
+---
+
+## 5. Demo 实验建议
+
+### 可行性验证（Stage 1）
+
+* 固定 `z₁`，观察轨迹多样性
+* 随机扰动 `z₁`，检查轨迹是否仍可执行
+
+### 性能验证（Stage 2）
+
+* 对比：
+
+  * 原始 `z₁`
+  * 优化后 `z₁`
+* 指标：成功率、碰撞率、交互强度
+
+---
+
+## 6. 适用与局限
+
+**适用场景**：
+
+* 有高质量参考轨迹
+* 希望学习整体策略风格
+
+**主要局限**：
+
+* 对抗意图是隐式的
+* 推理时 `z₁` 优化存在分布偏移风险
+
+---
+
+# README B: 显式导航 / 对抗意图解耦 + 开关控制（Adversarial Intent Factorization）
+
+## 1. 目标与动机
+
+本实现验证一种 **显式意图解耦的对抗导航框架**，将：
+
+* “去目标（navigation）”
+* “对抗他人（adversarial interaction）”
+
+视为两种**本质不同的决策意图**，并通过结构化潜变量与开关机制进行控制。
+
+核心假设：
+
+> 对抗行为不是持续存在的策略噪声，而是仅在交互条件满足时被激活的高层决策。
+
+---
+
+## 2. 方法概述
+
+### 2.1 潜变量设计
+
+* `z_nav`：导航意图潜变量（目标导向）
+* `z_adv`：对抗意图潜变量（交互策略）
+* `g ∈ {0,1}`：对抗开关（是否处于交互状态）
+
+组合形式：
+
+```
+z = [ z_nav , g · z_adv ]
+```
+
+---
+
+## 3. 架构组成
+
+* **Navigation Encoder `E_nav`**
+  输入：观测 + 目标
+  输出：`z_nav`
+
+* **Adversarial Encoder `E_adv`**
+  输入：观测 + 他人状态（或交互特征）
+  输出：`z_adv`
+
+* **Interaction Gate `G`**
+  输入：交互特征（距离、TTC 等）
+  输出：`g`
+
+* **Diffusion Trajectory Decoder `D_diff`**
+  条件：`z_nav` + `g·z_adv`
+
+---
+
+## 4. 训练逻辑
+
+### 4.1 数据要求
+
+* 普通导航数据（无交互 / 弱交互）
+* 含交互或对抗行为的数据（可合成）
+
+### 4.2 训练策略
+
+* `z_nav` 始终参与训练
+* `z_adv` **仅在 g=1 的样本中激活**
+* 强制模型在 `g=0` 时退化为纯导航策略
+
+### 4.3 损失设计
+
+* 基础 diffusion 去噪损失
+* 对抗样本中：交互相关奖励 / 代价
+* 可选：对 `z_adv` 的幅度或影响范围约束
+
+---
+
+## 5. 推理与对抗控制
+
+### 5.1 推理流程
+
+1. 根据当前场景计算交互条件 → `g`
+2. 若 `g=0`：
+
+   * 使用 `z_nav` 生成标准导航轨迹
+3. 若 `g=1`：
+
+   * 固定 `z_nav`
+   * 调节或优化 `z_adv` 以生成不同对抗风格
+
+### 5.2 对抗生成方式
+
+* 扫描 `z_adv` 潜空间
+* 梯度优化 `z_adv`
+* 固定导航目标不变
+
+---
+
+## 6. Demo 实验建议
+
+### 可行性验证（Stage 1）
+
+* `g=0` vs `g=1` 行为对比
+* 固定 `z_nav`，改变 `z_adv`
+
+### 性能验证（Stage 2）
+
+* 在相同起终点下：
+
+  * 成功率保持情况
+  * 对他人轨迹的影响程度
+
+---
+
+## 7. 方法优势与定位
+
+**优势**：
+
+* 语义清晰、可解释
+* 对抗行为可控、可开关
+* 适合系统性生成 worst-case 交互
+
+**定位**：
+
+* 不是学习“整体策略风格”
+* 而是建模“条件性对抗决策”
