@@ -229,5 +229,49 @@ def verify_hypotheses():
     else:
         print(f"❌ Hypothesis 2 (Part B) Failed: Output action is insensitive to other_state (std={action_std:.6f}).")
 
+    # --- Visualization ---
+    print("\nGenerating Visualization...")
+    import matplotlib.pyplot as plt
+    
+    # Calculate distances for plotting
+    # z_nav_mean: [B, D_nav]
+    z_nav_dist = torch.norm(z_nav_mean - z_nav_mean[0], dim=1).cpu().numpy()
+    z_adv_dist = torch.norm(z_adv_mean - z_adv_mean[0], dim=1).cpu().numpy()
+    
+    # action_mean: [B, 2]
+    action_dist = torch.norm(action_mean - action_mean[0], dim=1).cpu().numpy()
+    
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+    
+    # Plot 1: Gate Effectiveness
+    bars = axes[0].bar(['Gate Open (g=1)', 'Gate Closed (g=0)'], [avg_mse_g1, avg_mse_g0], color=['#2ca02c', '#d62728'])
+    axes[0].set_title('Hypothesis 1: Gate Effectiveness\n(MSE on Adversarial Samples)', fontsize=14)
+    axes[0].set_ylabel('Mean Squared Error', fontsize=12)
+    axes[0].grid(axis='y', linestyle='--', alpha=0.7)
+    
+    # Add value labels
+    for bar in bars:
+        height = bar.get_height()
+        axes[0].text(bar.get_x() + bar.get_width()/2., height,
+                f'{height:.4f}',
+                ha='center', va='bottom', fontsize=12, fontweight='bold')
+        
+    # Plot 2: Controllability & Stability
+    x = np.arange(batch_size)
+    axes[1].plot(x, z_nav_dist, label='z_nav change (Hypothesis 3)', marker='o', linestyle='--', linewidth=2, color='#1f77b4')
+    axes[1].plot(x, z_adv_dist, label='z_adv change (Hypothesis 2A)', marker='x', linewidth=2, color='#ff7f0e')
+    axes[1].plot(x, action_dist, label='Action change (Hypothesis 2B)', marker='s', linewidth=2, color='#2ca02c')
+    
+    axes[1].set_title('Hypothesis 2 & 3: Sensitivity to other_state\n(Distance from initial state)', fontsize=14)
+    axes[1].set_xlabel('Variation Step (Linear Interpolation of other_state)', fontsize=12)
+    axes[1].set_ylabel('Euclidean Distance', fontsize=12)
+    axes[1].legend(fontsize=10)
+    axes[1].grid(True, linestyle='--', alpha=0.7)
+    
+    plt.tight_layout()
+    save_path = project_root / 'hypothesis_verification_results.png'
+    plt.savefig(save_path)
+    print(f"Visualization saved to {save_path}")
+
 if __name__ == "__main__":
     verify_hypotheses()

@@ -245,7 +245,7 @@ Demo 认为成功，只需满足：
 
                          ┌─────────────────────────┐
                          │       obs_img           │
-                         └─────────┬──────────────┘
+                         └─────────┬───────────────┘
                                    │
                                    ▼
                         ┌───────────────────────┐
@@ -255,18 +255,18 @@ Demo 认为成功，只需满足：
           ┌────────────────────────┼───────────────────────────┐
           │                        │                           │
           ▼                        ▼                           ▼
-┌─────────────────┐       ┌──────────────────────┐     ┌────────────────────┐
-│ E_nav Head MLP   │       │ E_adv Head MLP       │     │  Diffusion Decoder │
-│ (z_nav)          │       │ (z_adv)              │     │  Conditional on z  │
-│ Inputs:          │       │ Inputs:              │     │ Inputs: z_nav + g·z_adv │
-│ - visual_feat    │       │ - visual_feat        │     │ + obs_lowdim + obs_img │
-│ - obs_lowdim     │       │ - obs_lowdim         │     └───────────┬────────────┘
-│ - goal_img       │       │ - other_state        │                 │
-└─────────┬────────┘       └─────────┬───────────┘                 ▼
+┌─────────────────-┐       ┌──────────────────────┐    ┌─────────────────────────┐
+│ E_nav Head MLP   │       │ E_adv Head MLP       │    │  Diffusion Decoder      │
+│ (z_nav)          │       │ (z_adv)              │    │  Conditional on z       │
+│ Inputs:          │       │ Inputs:              │    │ Inputs: z_nav + g·z_adv │
+│ - visual_feat    │       │ - visual_feat        │    │ + obs_lowdim + obs_img  │
+│ - obs_lowdim     │       │ - obs_lowdim         │    └───────────┬─────────────┘
+│ - goal_img       │       │ - other_state        │                │
+└─────────┬────────┘       └─────────┬────────────┘                ▼
           │                          │                          ┌─────────────┐
           ▼                          ▼                          │ Predicted   │
-      z_nav (mean, logvar)       z_adv (mean, logvar)            │ Trajectory  │
-                                                             └─────────────┘
+      z_nav (mean, logvar)       z_adv (mean, logvar)           │ Trajectory  │
+                                                                └─────────────┘
                                            ▲
                                            │
                                      g ∈ {0,1} (interaction switch)
