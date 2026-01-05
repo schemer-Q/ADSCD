@@ -196,6 +196,14 @@ def train_demo():
         print(f"  KL Adv:     {avg_kl_adv:.6f}")
 
     print("\nTraining Demo Completed.")
+    
+    # Save model
+    save_path = project_root / 'demo_model.ckpt'
+    torch.save({
+        'state_dict': policy.state_dict(),
+        'normalizer': normalizer.state_dict()
+    }, save_path)
+    print(f"Model saved to {save_path}")
 
 if __name__ == "__main__":
     train_demo()

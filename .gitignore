@@ -1,6 +1,7 @@
 *.png
 *.log
 *.pth
+*.ckpt
 __pycache__/
 .ipynb_checkpoints/
 .DS_Store
