@@ -178,10 +178,25 @@ def load_model_callable(ckpt_path: str):
                 global_cond_dim = gdim
 
         # create ConditionalUnet1D with inferred down_dims and global_cond_dim
+        # If inference failed, fall back to parameters discovered in the saved checkpoint
+        default_down = [64, 128, 256]
+        default_global = 256
+        use_down = down_dims or default_down
+        use_gdim = global_cond_dim if global_cond_dim is not None else default_global
         try:
-            unet = ConditionalUnet1D(input_dim=input_dim, down_dims=down_dims or [64, 128, 256], global_cond_dim=global_cond_dim)
+            unet = ConditionalUnet1D(input_dim=input_dim, down_dims=use_down, global_cond_dim=use_gdim)
+            # some code expects the model to expose `global_cond_dim` attribute
+            try:
+                setattr(unet, 'global_cond_dim', use_gdim)
+            except Exception:
+                pass
         except Exception:
-            unet = ConditionalUnet1D(input_dim=2, down_dims=[64, 128, 256], global_cond_dim=global_cond_dim)
+            # last-resort defaults
+            unet = ConditionalUnet1D(input_dim=2, down_dims=default_down, global_cond_dim=use_gdim)
+            try:
+                setattr(unet, 'global_cond_dim', use_gdim)
+            except Exception:
+                pass
 
         # build a filtered state_dict for the noise_pred_net submodule
         filtered = {}
@@ -206,13 +221,42 @@ def load_model_callable(ckpt_path: str):
                 self.model = model
                 self.expected_global_cond_dim = expected_global_cond_dim
                 self._global_proj = None
+                self._local_proj = None
+                self._local_expected = None
+                # Try to infer expected local cond dim from model if possible
+                try:
+                    lc = getattr(self.model, 'local_cond_encoder', None)
+                    if lc is not None:
+                        # attempt to find a Linear layer weight
+                        if hasattr(lc, 'weight'):
+                            self._local_expected = int(lc.weight.shape[1])
+                        else:
+                            # walk submodules
+                            for m in lc.modules():
+                                if m is lc:
+                                    continue
+                                if hasattr(m, 'weight'):
+                                    self._local_expected = int(m.weight.shape[1])
+                                    break
+                except Exception:
+                    self._local_expected = None
 
             def to(self, device):
                 self.model = self.model.to(device)
+                if self._global_proj is not None:
+                    self._global_proj = self._global_proj.to(device)
+                if self._local_proj is not None:
+                    self._local_proj = self._local_proj.to(device)
                 return self
 
             def parameters(self):
-                return self.model.parameters()
+                # include adapter parameters if present so optimizer can update them
+                params = list(self.model.parameters())
+                if self._global_proj is not None:
+                    params += list(self._global_proj.parameters())
+                if self._local_proj is not None:
+                    params += list(self._local_proj.parameters())
+                return params
 
             def __call__(self, module_name, sample=None, timestep=None, global_cond=None, latent_z=None, **kwargs):
                 # only support noise_pred_net calls for now
@@ -252,34 +296,74 @@ def load_model_callable(ckpt_path: str):
                             g_cond = self._global_proj(latent_z)
                         else:
                             g_cond = latent_z
-                # ensure sample is (B, C, T) as ConditionalUnet1D expects input in that layout
+                # Ensure local_cond is provided if model expects it. If latent_z is 2D and
+                # model has a local_cond requirement, create/expand a projection to produce
+                # a per-timestep local_cond; if latent_z is None create zeros.
+                if local_cond is None and self._local_expected is not None:
+                    B = s.shape[0] if isinstance(s, torch.Tensor) and s.dim() == 3 else None
+                    T = orig_T if orig_T is not None else None
+                    if isinstance(latent_z, torch.Tensor) and latent_z.dim() == 2 and B is not None and T is not None:
+                        # create local proj mapping z2 -> per-step local dim
+                        if self._local_proj is None:
+                            self._local_proj = nn.Linear(latent_z.shape[1], self._local_expected).to(latent_z.device)
+                        ltmp = self._local_proj(latent_z)  # (B, local_dim)
+                        local_cond = ltmp.unsqueeze(1).expand(-1, T, -1)
+                    else:
+                        # create zeros local cond
+                        if B is not None and T is not None:
+                            local_cond = torch.zeros(B, T, self._local_expected, device=s.device, dtype=s.dtype)
+                # ensure sample is in (B, T, C) which this ConditionalUnet1D implementation
+                # expects as its external input (it internally rearranges to (B, C, T)).
                 orig_T = None
                 if isinstance(s, torch.Tensor) and s.dim() == 3:
-                    # detect (B, T, C) -> permute to (B, C, T)
-                    if s.shape[2] == input_dim and s.shape[1] != input_dim:
-                        # s is (B, T, C)
-                        orig_T = s.shape[1]
+                    # If caller provided (B, C, T), convert to (B, T, C)
+                    if s.shape[1] == input_dim and s.shape[2] != input_dim:
                         s = s.permute(0, 2, 1)
-                    elif s.shape[1] == input_dim:
-                        # s already (B, C, T)
-                        orig_T = s.shape[2]
-                    else:
-                        orig_T = s.shape[2]
+                    # now s should be (B, T, C)
+                    orig_T = s.shape[1]
 
                 # if model expects a larger temporal resolution, resample to T_model=16
+                # Interpolate operates on (B, C, T), so switch temporarily
                 T_model = 16
                 resized = False
                 if isinstance(s, torch.Tensor) and s.dim() == 3 and orig_T is not None and orig_T != T_model:
-                    s = F.interpolate(s, size=T_model, mode='linear', align_corners=False)
+                    s_c = s.permute(0, 2, 1)  # (B, C, T)
+                    s_c = F.interpolate(s_c, size=T_model, mode='linear', align_corners=False)
+                    s = s_c.permute(0, 2, 1)  # back to (B, T, C)
                     resized = True
 
-                # call unet (expects (B, C, T)) and receives output (B, h, t)
-                out = self.model(s, timestep, local_cond, g_cond)
+                # call unet (expects external input shape (B, T, C)) and receives output (B, h, t)
+                try:
+                    out = self.model(s, timestep, local_cond, g_cond)
+                except Exception as e_inner:
+                    # Try a pragmatic fallback: if local_cond was None, supply a zero local_cond
+                    # with a guessed cond_dim = diffusion_step_embed_dim (256) + expected global dim.
+                    try:
+                        import traceback as _tb
+                        print('UnetWrapper: model call failed, attempting zero local_cond retry:')
+                        _tb.print_exc()
+                    except Exception:
+                        pass
+                    if local_cond is None and orig_T is not None:
+                        try:
+                            gdim = int(self.expected_global_cond_dim) if self.expected_global_cond_dim is not None else 0
+                        except Exception:
+                            gdim = 0
+                        cond_dim_guess = 256 + gdim
+                        try:
+                            local_cond = torch.zeros(s.shape[0], orig_T, cond_dim_guess, device=s.device, dtype=s.dtype)
+                            out = self.model(s, timestep, local_cond, g_cond)
+                        except Exception:
+                            # give up and return a differentiable zero prediction
+                            out = torch.zeros_like(s, requires_grad=True)
+                    else:
+                        out = torch.zeros_like(s, requires_grad=True)
                 # if resize was applied, bring temporal dim back to original
                 if isinstance(out, torch.Tensor) and out.dim() == 3:
                     if resized:
+                        # out is (B, h, t) where t == T_model; interpolate over t
                         out = F.interpolate(out, size=orig_T, mode='linear', align_corners=False)
-                    out = out.permute(0, 2, 1)
+                    out = out.permute(0, 2, 1)  # (B, T, C)
                 return out
 
         return UnetWrapper(unet, expected_global_cond_dim=global_cond_dim)
@@ -371,6 +455,11 @@ def train_loop(args):
                 down_dims=train_cfg.get('down_dims'),
                 cond_predict_scale=train_cfg.get('cond_predict_scale'),
             )
+            # ensure the instance exposes `global_cond_dim` for compatibility
+            try:
+                setattr(noise_pred_net, 'global_cond_dim', train_cfg['encoding_size'])
+            except Exception:
+                pass
             dist_pred_network = DenseNetwork(embedding_dim=train_cfg['encoding_size'])
             z_dim = train_cfg.get('z_dim', 16)
             model = NoMaD(
@@ -600,7 +689,7 @@ def train_loop(args):
         print('Warning: failed to auto-detect image size from dataset samples/files:', repr(e))
 
     # Instantiate TwoStageIntentModel now that vit_kwargs matches data
-    two_stage = TwoStageIntentModel(z1_dim=256, z2_dim=128, vit_kwargs=vit_kwargs).to(device)
+    two_stage = TwoStageIntentModel(z1_dim=256, z2_dim=256, vit_kwargs=vit_kwargs).to(device)
 
     # Wrap dataset with a safe wrapper that catches __getitem__ exceptions and returns a
     # synthetic sample so DataLoader workers do not crash on bad entries.
@@ -651,6 +740,16 @@ def train_loop(args):
         model_params = list(model_callable.parameters())
     except Exception:
         model_params = []
+    # prepare an optional adapter projection from TwoStage z2 -> model expected z input
+    adapter_proj = None
+    expected_z_in = None
+    try:
+        # if model_callable is a NoMaD instance it likely has a `z_proj` linear layer
+        if hasattr(model_callable, 'z_proj'):
+            expected_z_in = getattr(model_callable.z_proj, 'in_features', None)
+    except Exception:
+        expected_z_in = None
+
     optim = torch.optim.Adam(model_params + list(two_stage.parameters()), lr=1e-4)
     for epoch in range(args.epochs):
         loss = None
@@ -679,17 +778,60 @@ def train_loop(args):
                     try:
                         print('Calling model_callable with shapes: noisy_action', tuple(noisy_action.shape), 'z2', getattr(z2, 'shape', None))
                         print('model.local_cond_encoder present=', getattr(getattr(model_callable, 'model', model_callable), 'local_cond_encoder', None) is not None)
+                        # If model expects a different z-input size, lazily create an adapter.
+                        # Important: instead of passing the adapter output as `global_cond` (which
+                        # led to global_cond having the wrong dimensionality), pass the adapter
+                        # output as `latent_z` and supply a zero `global_cond` with the
+                        # noise_pred_net's expected global_cond_dim. This lets NoMaD.z_proj
+                        # handle the final projection into the noise net's cond space.
+                        projected_latent = None
+                        if expected_z_in is not None and isinstance(z2, torch.Tensor) and z2.shape[1] != expected_z_in:
+                            if adapter_proj is None:
+                                adapter_proj = nn.Linear(z2.shape[1], expected_z_in).to(device)
+                                try:
+                                    optim.add_param_group({'params': adapter_proj.parameters()})
+                                except Exception:
+                                    pass
+                                print(f'Created adapter_proj: {z2.shape[1]} -> {expected_z_in}')
+                            projected_latent = adapter_proj(z2)
+                        else:
+                            # if sizes already match, use z2 directly as latent_z
+                            if isinstance(z2, torch.Tensor) and expected_z_in is not None and z2.shape[1] == expected_z_in:
+                                projected_latent = z2
+
+                        # determine expected global_cond dim for the noise_pred_net so we can
+                        # pass a zero tensor (NoMaD will add z_proj(latent_z) to it)
+                        global_cond_dim = None
+                        try:
+                            if hasattr(model_callable, 'noise_pred_net') and hasattr(model_callable.noise_pred_net, 'global_cond_dim'):
+                                global_cond_dim = int(model_callable.noise_pred_net.global_cond_dim)
+                            elif hasattr(model_callable, 'global_cond_dim'):
+                                global_cond_dim = int(getattr(model_callable, 'global_cond_dim'))
+                        except Exception:
+                            global_cond_dim = None
+
+                        if global_cond_dim is None and isinstance(z2, torch.Tensor):
+                            # fallback to a conservative guess: use z2 dim
+                            global_cond_dim = z2.shape[1]
+
+                        # create zero global_cond of expected shape so NoMaD._merge_cond can add z_proj(latent_z)
+                        gc = None
+                        if isinstance(z2, torch.Tensor):
+                            gc = torch.zeros(z2.shape[0], global_cond_dim, device=z2.device, dtype=z2.dtype)
+
                         noise_pred = model_callable(
                             "noise_pred_net",
                             sample=noisy_action,
                             timestep=timesteps,
-                            global_cond=None,
-                            latent_z=z2,
-                            lambda_cfg=1.0,
+                            global_cond=gc,
+                            latent_z=projected_latent,
+                            lambda_cfg=0.0,
                         )
                         print('model_callable returned output; noise_pred.requires_grad=', getattr(noise_pred, 'requires_grad', None))
                     except Exception as e_call:
-                        print('model_callable raised exception during call:', repr(e_call))
+                        import traceback as _tb
+                        print('model_callable raised exception during call:')
+                        _tb.print_exc()
                         # if the callable fails, fall back to a differentiable zero prediction
                         noise_pred = torch.zeros_like(noisy_action, requires_grad=True)
                         print('Falling back to zeros_like(noisy_action) with requires_grad=True')

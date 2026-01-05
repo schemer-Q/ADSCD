@@ -8,6 +8,7 @@ from einops.layers.torch import Rearrange
 from diffusion_policy.model.diffusion.conv1d_components import (
     Downsample1d, Upsample1d, Conv1dBlock)
 from diffusion_policy.model.diffusion.positional_embedding import SinusoidalPosEmb
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +183,13 @@ class ConditionalUnet1D(nn.Module):
         output: (B,T,input_dim)
         """
         sample = einops.rearrange(sample, 'b h t -> b t h')
+        # optional debug printing to help diagnose shape mismatches when
+        # integrating pretrained checkpoints. Controlled via UNET_DEBUG env var.
+        if os.environ.get('UNET_DEBUG') == '1':
+            try:
+                print('UNET_DEBUG: after rearrange sample.shape=', tuple(sample.shape))
+            except Exception:
+                pass
 
         # 1. time
         timesteps = timestep
@@ -213,18 +221,40 @@ class ConditionalUnet1D(nn.Module):
         x = sample
         h = []
         for idx, (resnet, resnet2, downsample) in enumerate(self.down_modules):
+            if os.environ.get('UNET_DEBUG') == '1':
+                print(f'UNET_DEBUG: down idx={idx} before resnet x.shape=', tuple(x.shape))
             x = resnet(x, global_feature)
             if idx == 0 and len(h_local) > 0:
                 x = x + h_local[0]
             x = resnet2(x, global_feature)
+            if os.environ.get('UNET_DEBUG') == '1':
+                print(f'UNET_DEBUG: down idx={idx} after resnet2 x.shape=', tuple(x.shape))
             h.append(x)
             x = downsample(x)
+            if os.environ.get('UNET_DEBUG') == '1':
+                print(f'UNET_DEBUG: down idx={idx} after downsample x.shape=', tuple(x.shape))
 
         for mid_module in self.mid_modules:
             x = mid_module(x, global_feature)
 
         for idx, (resnet, resnet2, upsample) in enumerate(self.up_modules):
-            x = torch.cat((x, h.pop()), dim=1)
+            if os.environ.get('UNET_DEBUG') == '1':
+                print(f'UNET_DEBUG: up idx={idx} x.shape=', tuple(x.shape), ' h_top.shape=', tuple(h[-1].shape) if h else None)
+            h_top = h.pop()
+            # align temporal dimension if mismatched due to odd/even downsampling
+            if x.shape[2] != h_top.shape[2]:
+                t_min = min(x.shape[2], h_top.shape[2])
+                if x.shape[2] > t_min:
+                    start = (x.shape[2] - t_min) // 2
+                    x = x[:, :, start:start + t_min]
+                if h_top.shape[2] > t_min:
+                    start = (h_top.shape[2] - t_min) // 2
+                    h_top = h_top[:, :, start:start + t_min]
+                if os.environ.get('UNET_DEBUG') == '1':
+                    print(f'UNET_DEBUG: aligned cat shapes x={tuple(x.shape)} h_top={tuple(h_top.shape)}')
+            x = torch.cat((x, h_top), dim=1)
+            if os.environ.get('UNET_DEBUG') == '1':
+                print(f'UNET_DEBUG: up idx={idx} after cat x.shape=', tuple(x.shape))
             x = resnet(x, global_feature)
             # The correct condition should be:
             # if idx == (len(self.up_modules)-1) and len(h_local) > 0:
