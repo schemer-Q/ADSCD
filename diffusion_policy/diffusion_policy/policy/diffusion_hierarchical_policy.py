@@ -48,7 +48,9 @@ class ViTHierarchicalEncoderWrapper:
                 mha_num_attention_heads=4,
                 mha_num_attention_layers=4,
                 latent_dim_nav=64,
-                latent_dim_adv=32):
+                latent_dim_adv=32,
+                obs_lowdim_dim=0,
+                other_state_dim=0):
         # Import the actual class using the robust import mechanism
         try:
             from train.vint_train.models.vae.vit_hierarchical_encoder import ViTHierarchicalEncoder
@@ -84,7 +86,9 @@ class ViTHierarchicalEncoderWrapper:
             mha_num_attention_heads=mha_num_attention_heads,
             mha_num_attention_layers=mha_num_attention_layers,
             latent_dim_nav=latent_dim_nav,
-            latent_dim_adv=latent_dim_adv
+            latent_dim_adv=latent_dim_adv,
+            obs_lowdim_dim=obs_lowdim_dim,
+            other_state_dim=other_state_dim
         )
 
 class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
@@ -193,9 +197,25 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
         obs_img = obs_dict['obs_img']
         goal_img = obs_dict['goal_img']
         adv_mask = obs_dict.get('adv_mask', None)
+        other_state = obs_dict.get('other_state', None)
         
-        # Generate hierarchical latent z from visual inputs
-        z_nav_mean, z_nav_logvar, z_adv_mean, z_adv_logvar = self.vit_encoder(obs_img, goal_img, adv_mask)
+        # Normalize low-dimensional observations if provided
+        nobs = None
+        obs_lowdim = None
+        if 'obs' in obs_dict:
+            nobs = self.normalizer['obs'].normalize(obs_dict['obs'])
+            # Use flattened observation as obs_lowdim for encoder
+            # Assuming obs is [B, T, D], we take the first step or flatten?
+            # Usually encoder takes current state. Let's take the first step of normalized obs.
+            # Or if n_obs_steps > 1, maybe flatten.
+            # For simplicity and consistency with typical VAEs, let's flatten the context steps.
+            obs_lowdim = nobs[:,:self.n_obs_steps,:].reshape(nobs.shape[0], -1)
+        
+        # Generate hierarchical latent z from visual inputs + lowdim + other_state
+        z_nav_mean, z_nav_logvar, z_adv_mean, z_adv_logvar = self.vit_encoder(
+            obs_img, goal_img, adv_mask, 
+            obs_lowdim=obs_lowdim, other_state=other_state
+        )
         z = self.vit_encoder.sample(z_nav_mean, z_nav_logvar, z_adv_mean, z_adv_logvar, adv_mask)
         
         # Ensure z is on the same device as the policy
@@ -204,11 +224,6 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
         z_nav_logvar = z_nav_logvar.to(self.device)
         z_adv_mean = z_adv_mean.to(self.device)
         z_adv_logvar = z_adv_logvar.to(self.device)
-        
-        # Normalize low-dimensional observations if provided
-        nobs = None
-        if 'obs' in obs_dict:
-            nobs = self.normalizer['obs'].normalize(obs_dict['obs'])
         
         B = obs_img.shape[0]
         T = self.horizon
@@ -222,8 +237,7 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
         local_cond = None
         global_cond = z  # Use hierarchical latent z as global condition
         
-        if 'obs' in obs_dict:
-            nobs = self.normalizer['obs'].normalize(obs_dict['obs'])
+        if nobs is not None:
             if self.obs_as_global_cond:
                 # Concatenate latent z with flattened observations
                 obs_flat = nobs[:,:self.n_obs_steps,:].reshape(nobs.shape[0], -1)
@@ -289,9 +303,19 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
         obs_img = batch['obs_img']
         goal_img = batch['goal_img']
         adv_mask = batch.get('adv_mask', None)
+        other_state = batch.get('other_state', None)
         
-        # Generate hierarchical latent distribution from visual inputs
-        z_nav_mean, z_nav_logvar, z_adv_mean, z_adv_logvar = self.vit_encoder(obs_img, goal_img, adv_mask)
+        # Prepare lowdim obs for encoder
+        obs_lowdim = None
+        if 'obs' in nbatch:
+            obs = nbatch['obs']
+            obs_lowdim = obs[:,:self.n_obs_steps,:].reshape(obs.shape[0], -1)
+
+        # Generate hierarchical latent distribution from visual inputs + lowdim + other_state
+        z_nav_mean, z_nav_logvar, z_adv_mean, z_adv_logvar = self.vit_encoder(
+            obs_img, goal_img, adv_mask,
+            obs_lowdim=obs_lowdim, other_state=other_state
+        )
         z = self.vit_encoder.sample(z_nav_mean, z_nav_logvar, z_adv_mean, z_adv_logvar, adv_mask)
         
         # Ensure z is on the same device as the policy
@@ -424,9 +448,20 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
         obs_img = obs_dict['obs_img'].detach()
         goal_img = obs_dict['goal_img'].detach()
         adv_mask = obs_dict.get('adv_mask', None)
+        other_state = obs_dict.get('other_state', None)
+        
+        # Normalize low-dimensional observations if provided
+        nobs = None
+        obs_lowdim = None
+        if 'obs' in obs_dict:
+            nobs = self.normalizer['obs'].normalize(obs_dict['obs'])
+            obs_lowdim = nobs[:,:self.n_obs_steps,:].reshape(nobs.shape[0], -1)
         
         # Generate navigation and adversarial intent distributions
-        z_nav_mean, z_nav_logvar, z_adv_mean, z_adv_logvar = self.vit_encoder(obs_img, goal_img, adv_mask)
+        z_nav_mean, z_nav_logvar, z_adv_mean, z_adv_logvar = self.vit_encoder(
+            obs_img, goal_img, adv_mask,
+            obs_lowdim=obs_lowdim, other_state=other_state
+        )
         
         # Ensure tensors are on the same device as the policy
         z_nav_mean = z_nav_mean.to(self.device)
@@ -443,11 +478,6 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
         # Optimizer for z_adv
         optimizer = torch.optim.Adam([z_adv], lr=lr)
         
-        # Normalize observations
-        nobs = None
-        if 'obs' in obs_dict:
-            nobs = self.normalizer['obs'].normalize(obs_dict['obs'])
-        
         B = obs_img.shape[0]
         T = self.horizon
         Da = self.action_dim
@@ -459,7 +489,8 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
             """Helper: given full z (nav+adv), run conditional_sample and return unnormalized action_pred."""
             local_cond = None
             global_cond = z_tensor
-            if 'obs' in obs_dict and self.obs_as_global_cond:
+            if nobs is not None and self.obs_as_global_cond:
+                # Concatenate latent z with flattened observations
                 obs_flat = nobs[:,:self.n_obs_steps,:].reshape(nobs.shape[0], -1)
                 # Ensure obs_flat is on the same device as z_tensor
                 obs_flat = obs_flat.to(z_tensor.device)
@@ -564,7 +595,7 @@ class DiffusionHierarchicalPolicy(BaseLowdimPolicy):
             local_cond = None
             global_cond = z
             
-            if 'obs' in obs_dict:
+            if nobs is not None:
                 if self.obs_as_global_cond:
                     obs_flat = nobs[:,:self.n_obs_steps,:].reshape(nobs.shape[0], -1)
                     # Ensure obs_flat is on the same device as z

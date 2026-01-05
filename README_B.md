@@ -240,3 +240,150 @@ Demo 认为成功，只需满足：
 * 梯度优化 `z_adv`
 * 多智能体对抗
 * 与 ACT-style latent 的对比实验
+
+## 9. 信息流图
+
+                         ┌─────────────────────────┐
+                         │       obs_img           │
+                         └─────────┬──────────────┘
+                                   │
+                                   ▼
+                        ┌───────────────────────┐
+                        │   Shared Visual       │
+                        │     Backbone (ViT)    │
+                        └─────────┬─────────────┘
+          ┌────────────────────────┼───────────────────────────┐
+          │                        │                           │
+          ▼                        ▼                           ▼
+┌─────────────────┐       ┌──────────────────────┐     ┌────────────────────┐
+│ E_nav Head MLP   │       │ E_adv Head MLP       │     │  Diffusion Decoder │
+│ (z_nav)          │       │ (z_adv)              │     │  Conditional on z  │
+│ Inputs:          │       │ Inputs:              │     │ Inputs: z_nav + g·z_adv │
+│ - visual_feat    │       │ - visual_feat        │     │ + obs_lowdim + obs_img │
+│ - obs_lowdim     │       │ - obs_lowdim         │     └───────────┬────────────┘
+│ - goal_img       │       │ - other_state        │                 │
+└─────────┬────────┘       └─────────┬───────────┘                 ▼
+          │                          │                          ┌─────────────┐
+          ▼                          ▼                          │ Predicted   │
+      z_nav (mean, logvar)       z_adv (mean, logvar)            │ Trajectory  │
+                                                             └─────────────┘
+                                           ▲
+                                           │
+                                     g ∈ {0,1} (interaction switch)
+                                     └─ multiplies z_adv before feeding to decoder
+
+## 10. 补充说明
+
+  ### Adversarial Intent Factorization: Minimal Demo
+
+  #### 1. 项目概述
+
+  本项目实现了对抗意图分离与层次化潜变量的最小可行 Demo，用于验证在导航任务中可控地生成对抗轨迹，同时保证导航目标不被破坏。
+
+  核心设计思想：
+
+  * **导航潜变量 (`z_nav`)**：编码自主导航意图。
+  * **对抗潜变量 (`z_adv`)**：编码对抗意图，仅在交互场景激活。
+  * **交互开关 (`g`)**：二值控制 `z_adv` 是否生效。
+  * **Diffusion 解码器**：基于 `[z_nav, g * z_adv]` 和观测信息生成动作轨迹。
+
+  #### 2. 架构设计
+
+  ##### 编码器与共享 Backbone
+
+  * 两个编码器共享视觉 backbone（如 ViT）提取图像特征。
+  * 各自拥有独立的 MLP 头：
+
+    * `z_nav_head(visual_feat, obs_lowdim, goal)`
+    * `z_adv_head(visual_feat, obs_lowdim, other_state)`
+  * Backbone 只处理视觉特征，低维信息（目标、对手状态等）由各自 MLP 处理。
+
+  ##### 对手状态表征
+
+  * **训练阶段**：由仿真环境提供低维状态向量（如相对位置和速度）。
+  * **推理阶段**：
+
+    * 仿真环境可直接读取。
+    * 真实世界部署需要通过感知+跟踪+预测模块估计对手状态。
+
+  ##### 开关机制（Mask）
+
+  * `g` 在 latent 层控制 `z_adv` 是否参与 Diffusion decoder：
+
+  ```python
+  z_combined = concat(z_nav, g * z_adv)
+  ```
+
+  * `g=0`：z_adv 不参与，梯度不会回传 E_adv。
+  * `g=1`：z_adv 参与，梯度回传 E_adv。
+
+  ##### Loss 与梯度传递
+
+  * Diffusion decoder 的 loss 对组合 latent 回传梯度：
+
+    * z_nav 总是更新。
+    * z_adv 仅在 `g=1` 样本中更新。
+
+  ##### 数据流
+
+  1. 输入观测图像 → **共享 backbone** → 提取视觉特征。
+  2. E_nav MLP → 生成 z_nav。
+  3. E_adv MLP → 生成 z_adv（包含对手状态）。
+  4. z_combined = `[z_nav, g * z_adv]` → **Diffusion decoder** → 生成动作轨迹。
+  5. Diffusion loss → 梯度回传 → 更新有效编码器。
+
+  #### 3. 最小 Demo 使用说明
+
+  ##### 依赖环境
+
+  * Python >= 3.9
+  * PyTorch >= 2.1
+  * Hydra
+  * OmegaConf
+  * Matplotlib
+  * Numpy
+
+  ##### 运行 Demo
+
+  ```bash
+  python minimal_demo.py
+  ```
+
+  * 会生成三种场景：
+
+    1. `g=0`：纯导航行为。
+    2. `g=1`：交互场景，z_adv 激活。
+    3. `g=1` + z_adv 优化：固定 z_nav，优化 z_adv。
+  * 可视化结果保存至 `demo_results` 目录。
+
+  ##### 输出说明
+
+  * `comparison_g0_g1.png`：安全行为 vs 对抗行为对比。
+  * `comparison_adv_opt.png`：对抗行为优化前后对比。
+  * 控制台打印 latent 范数和 MSE 差异，验证 z_adv 的有效性。
+
+  #### 4. 扩展方向
+
+  * 使用感知+预测模块替代仿真对手状态，以部署于真实世界。
+  * 可加入 learned gate `G`，根据场景自适应激活对抗意图。
+  * 支持多智能体交互与更复杂的对抗策略优化。
+
+  #### 5. 参考信息流图
+
+  ```
+                          obs_img
+                              │
+                              ▼
+                  ┌─────────────────┐
+                  │ Shared Backbone │
+                  └─────────┬───────┘
+            ┌───────────────┼───────────────┐
+            │               │               │
+            ▼               ▼               ▼
+    E_nav Head MLP    E_adv Head MLP   Diffusion Decoder
+    (z_nav)           (z_adv)          (z_combined = [z_nav, g * z_adv])
+    Inputs:           Inputs:          + obs_lowdim + obs_img
+    - visual_feat     - visual_feat
+    - obs_lowdim      - obs_lowdim
+    - goal_img        - other_state
+  ```

@@ -25,6 +25,7 @@ pred_action_steps_only: False
 latent_dim_nav: 64  # Navigation intent dimension
 latent_dim_adv: 32  # Adversarial intent dimension
 latent_dim: 96  # Total latent dimension (64 + 32)
+other_state_dim: 2  # Dimension of other agent's state
 
 # KL loss weights
 kl_weight: 1.0      # Weight for navigation intent KL loss
@@ -41,6 +42,8 @@ vit_encoder:
   mha_num_attention_layers: 4
   latent_dim_nav: ${latent_dim_nav}
   latent_dim_adv: ${latent_dim_adv}
+  obs_lowdim_dim: ${eval:'${n_obs_steps}*${obs_dim}'}
+  other_state_dim: ${other_state_dim}
 
 policy:
   _target_: diffusion_policy.policy.diffusion_hierarchical_policy.DiffusionHierarchicalPolicy

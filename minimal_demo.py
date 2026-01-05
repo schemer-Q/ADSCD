@@ -32,20 +32,28 @@ sys.path.append(str(project_root / 'train'))
 OmegaConf.register_new_resolver("eval", eval, replace=True)
 
 # --- Helper Functions ---
-def visualize_trajectory(gt_action, pred_action, title, filename):
+def visualize_trajectory(traj1, traj2, label1, label2, title, filename):
     """Visualize and save trajectory comparison"""
-    if torch.is_tensor(gt_action): gt_action = gt_action.cpu().numpy()
-    if torch.is_tensor(pred_action): pred_action = pred_action.cpu().numpy()
+    if torch.is_tensor(traj1): traj1 = traj1.cpu().numpy()
+    if torch.is_tensor(traj2): traj2 = traj2.cpu().numpy()
     
-    fig, ax = plt.subplots(figsize=(10, 5))
-    n_actions = gt_action.shape[-1]
+    n_actions = traj1.shape[-1]
+    # Create subplots for each dimension to make it clearer
+    fig, axes = plt.subplots(n_actions, 1, figsize=(10, 3 * n_actions), sharex=True)
+    if n_actions == 1:
+        axes = [axes]
+    
     for i in range(n_actions):
-        ax.plot(gt_action[:, i], label=f'GT Dim {i}', linestyle='-', alpha=0.5)
-        ax.plot(pred_action[:, i], label=f'Pred Dim {i}', linestyle='--', linewidth=2)
+        ax = axes[i]
+        ax.plot(traj1[:, i], label=f'{label1}', linestyle='-', linewidth=2, alpha=0.7)
+        ax.plot(traj2[:, i], label=f'{label2}', linestyle='--', linewidth=2, alpha=0.9)
+        ax.set_ylabel(f'Action Dim {i}')
+        ax.legend()
+        ax.grid(True)
     
-    ax.set_title(title)
-    ax.legend()
-    ax.grid(True)
+    axes[-1].set_xlabel('Time Step')
+    fig.suptitle(title)
+    plt.tight_layout()
     plt.savefig(filename)
     plt.close()
     print(f"Saved visualization to {filename}")
@@ -69,9 +77,18 @@ def minimal_demo():
     # - E_nav & E_adv: Implemented in ViTHierarchicalEncoder
     # - D_diff: Implemented in DiffusionHierarchicalPolicy (ConditionalUnet1D)
     print("\nInitializing Model Framework...")
+    # Speed up: Reduce inference steps for demo
+    if 'policy' in cfg and 'num_inference_steps' in cfg.policy:
+        cfg.policy.num_inference_steps = 20
+        print(f"  [SpeedUp] Reduced inference steps to {cfg.policy.num_inference_steps}")
+    
     policy = hydra.utils.instantiate(cfg.policy)
     policy.to(device)
     policy.eval()
+    
+    # Ensure policy uses the reduced steps if not set by config
+    if hasattr(policy, 'num_inference_steps'):
+        policy.num_inference_steps = 20
     
     # Initialize normalizer (required for policy operation)
     from diffusion_policy.model.common.normalizer import LinearNormalizer
@@ -87,6 +104,7 @@ def minimal_demo():
     print("Model initialized.")
     print(f"  Latent Nav Dim (z_nav): {cfg.latent_dim_nav}")
     print(f"  Latent Adv Dim (z_adv): {cfg.latent_dim_adv}")
+    print(f"  Other State Dim: {cfg.other_state_dim}")
     
     # 3. Prepare Dummy Data
     batch_size = 1
@@ -96,6 +114,7 @@ def minimal_demo():
     obs_img = torch.randn(batch_size, 3*context_size, 128, 128, device=device) # Observation
     goal_img = torch.randn(batch_size, 3, 128, 128, device=device)             # Goal
     obs_lowdim = torch.randn(batch_size, cfg.horizon, cfg.obs_dim, device=device)
+    other_state = torch.randn(batch_size, cfg.other_state_dim, device=device)  # Other agent state
     
     # 4. Demo Scenarios
     
@@ -108,7 +127,8 @@ def minimal_demo():
         'obs': obs_lowdim,
         'obs_img': obs_img,
         'goal_img': goal_img,
-        'adv_mask': g_safe
+        'adv_mask': g_safe,
+        'other_state': other_state
     }
     
     with torch.no_grad():
@@ -128,7 +148,8 @@ def minimal_demo():
         'obs': obs_lowdim,
         'obs_img': obs_img,
         'goal_img': goal_img,
-        'adv_mask': g_adv
+        'adv_mask': g_adv,
+        'other_state': other_state
     }
     
     with torch.no_grad():
@@ -138,6 +159,31 @@ def minimal_demo():
     z_adv_adv = result_adv['z_adv_mean']
     print(f"  z_nav norm: {torch.norm(z_nav_adv).item():.4f}")
     print(f"  z_adv norm: {torch.norm(z_adv_adv).item():.4f} (Active)")
+
+    # Scenario B2: Verify other_state influence
+    print("\n--- Scenario B2: Verify other_state influence ---")
+    # Change other_state
+    other_state_new = torch.randn(batch_size, cfg.other_state_dim, device=device)
+    obs_dict_adv_new = {
+        'obs': obs_lowdim,
+        'obs_img': obs_img,
+        'goal_img': goal_img,
+        'adv_mask': g_adv,
+        'other_state': other_state_new
+    }
+    with torch.no_grad():
+        result_adv_new = policy.predict_action(obs_dict_adv_new)
+    
+    z_nav_new = result_adv_new['z_nav_mean']
+    z_adv_new = result_adv_new['z_adv_mean']
+    
+    # Check if z_nav changed (should NOT change)
+    nav_diff = torch.norm(z_nav_adv - z_nav_new).item()
+    print(f"  z_nav difference (should be 0): {nav_diff:.6f}")
+    
+    # Check if z_adv changed (SHOULD change)
+    adv_diff = torch.norm(z_adv_adv - z_adv_new).item()
+    print(f"  z_adv difference (should be > 0): {adv_diff:.6f}")
     
     # Scenario C: Adversarial Optimization
     # README: "Fix z_nav, optimize z_adv"
@@ -158,6 +204,7 @@ def minimal_demo():
     print("\n--- Results Comparison ---")
     action_safe = result_safe['action'][0].cpu().numpy()
     action_adv = result_adv['action'][0].cpu().numpy()
+    action_adv_new = result_adv_new['action'][0].cpu().numpy()
     action_opt = result_opt['action'][0].cpu().numpy()
     
     mse_diff = np.mean((action_safe - action_adv)**2)
@@ -166,8 +213,9 @@ def minimal_demo():
     output_dir = pathlib.Path("demo_results")
     output_dir.mkdir(exist_ok=True)
     
-    visualize_trajectory(action_safe, action_adv, "Safe (g=0) vs Adversarial (g=1)", output_dir / "comparison_g0_g1.png")
-    visualize_trajectory(action_adv, action_opt, "Adversarial vs Optimized", output_dir / "comparison_adv_opt.png")
+    visualize_trajectory(action_safe, action_adv, "Safe (g=0)", "Adversarial (g=1)", "Safe vs Adversarial Behavior", output_dir / "comparison_g0_g1.png")
+    visualize_trajectory(action_adv, action_adv_new, "Adversarial (State A)", "Adversarial (State B)", "Impact of Changing Other State", output_dir / "comparison_other_state.png")
+    visualize_trajectory(action_adv, action_opt, "Adversarial (Initial)", "Adversarial (Optimized)", "Adversarial Optimization", output_dir / "comparison_adv_opt.png")
     
     print("\nDemo completed successfully.")
     print(f"Results saved to {output_dir.absolute()}")

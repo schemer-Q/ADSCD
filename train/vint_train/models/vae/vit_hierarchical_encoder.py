@@ -34,6 +34,8 @@ class ViTHierarchicalEncoder(nn.Module):
         mha_num_attention_layers: int = 4,
         latent_dim_nav: int = 64,
         latent_dim_adv: int = 32,
+        obs_lowdim_dim: int = 0,
+        other_state_dim: int = 0,
     ) -> None:
         """
         ViT+MLP Hierarchical Encoder class that generates hierarchical latent z distribution
@@ -45,6 +47,8 @@ class ViTHierarchicalEncoder(nn.Module):
         self.latent_dim_nav = latent_dim_nav
         self.latent_dim_adv = latent_dim_adv
         self.latent_dim = latent_dim_nav + latent_dim_adv
+        self.obs_lowdim_dim = obs_lowdim_dim
+        self.other_state_dim = other_state_dim
         
         if type(image_size) == int:
             self.image_height = image_size
@@ -65,35 +69,41 @@ class ViTHierarchicalEncoder(nn.Module):
         )
         
         # MLP for generating navigation intent latent z_nav distribution
+        # Input: Visual features + Low-dim observation
+        nav_input_dim = obs_encoding_size + obs_lowdim_dim
         self.z_nav_mean_mlp = nn.Sequential(
-            nn.Linear(obs_encoding_size, obs_encoding_size // 2),
+            nn.Linear(nav_input_dim, nav_input_dim // 2),
             nn.ReLU(),
-            nn.Linear(obs_encoding_size // 2, latent_dim_nav)
+            nn.Linear(nav_input_dim // 2, latent_dim_nav)
         )
         
         self.z_nav_logvar_mlp = nn.Sequential(
-            nn.Linear(obs_encoding_size, obs_encoding_size // 2),
+            nn.Linear(nav_input_dim, nav_input_dim // 2),
             nn.ReLU(),
-            nn.Linear(obs_encoding_size // 2, latent_dim_nav)
+            nn.Linear(nav_input_dim // 2, latent_dim_nav)
         )
         
         # MLP for generating adversarial intent latent z_adv distribution
+        # Input: Visual features + Low-dim observation + Other state
+        adv_input_dim = obs_encoding_size + obs_lowdim_dim + other_state_dim
         self.z_adv_mean_mlp = nn.Sequential(
-            nn.Linear(obs_encoding_size, obs_encoding_size // 2),
+            nn.Linear(adv_input_dim, adv_input_dim // 2),
             nn.ReLU(),
-            nn.Linear(obs_encoding_size // 2, latent_dim_adv)
+            nn.Linear(adv_input_dim // 2, latent_dim_adv)
         )
         
         self.z_adv_logvar_mlp = nn.Sequential(
-            nn.Linear(obs_encoding_size, obs_encoding_size // 2),
+            nn.Linear(adv_input_dim, adv_input_dim // 2),
             nn.ReLU(),
-            nn.Linear(obs_encoding_size // 2, latent_dim_adv)
+            nn.Linear(adv_input_dim // 2, latent_dim_adv)
         )
     
     def forward(
         self, obs_img: torch.tensor, goal_img: torch.tensor, 
         adv_mask: Optional[torch.tensor] = None,
-        input_goal_mask: torch.tensor = None
+        input_goal_mask: torch.tensor = None,
+        obs_lowdim: Optional[torch.tensor] = None,
+        other_state: Optional[torch.tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Forward pass of ViT+MLP Hierarchical Encoder
@@ -104,6 +114,8 @@ class ViTHierarchicalEncoder(nn.Module):
             adv_mask: Binary mask controlling adversarial intent activation [B, 1]
                      0: disable adversarial intent, 1: enable adversarial intent
             input_goal_mask: Optional goal mask [B]
+            obs_lowdim: Low-dimensional observation [B, obs_lowdim_dim]
+            other_state: Other agent's state [B, other_state_dim]
             
         Returns:
             z_nav_mean: Mean of navigation latent distribution [B, latent_dim_nav]
@@ -119,13 +131,31 @@ class ViTHierarchicalEncoder(nn.Module):
         # Get ViT encoding
         vit_encoding = self.vit(x, input_goal_mask)
         
+        # Prepare inputs for navigation head
+        nav_input = vit_encoding
+        if self.obs_lowdim_dim > 0:
+            if obs_lowdim is None:
+                raise ValueError("obs_lowdim is required but not provided")
+            # Flatten obs_lowdim if necessary (e.g. if it has time dimension)
+            # Assuming obs_lowdim is [B, obs_lowdim_dim] or [B, T, D] -> we need [B, D] or similar?
+            # Usually encoder takes current observation. If obs_lowdim is [B, T, D], we might take the last one or flatten.
+            # For simplicity, let's assume the caller passes the correct shape [B, obs_lowdim_dim].
+            nav_input = torch.cat([nav_input, obs_lowdim], dim=-1)
+            
         # Generate navigation intent latent distribution
-        z_nav_mean = self.z_nav_mean_mlp(vit_encoding)
-        z_nav_logvar = self.z_nav_logvar_mlp(vit_encoding)
+        z_nav_mean = self.z_nav_mean_mlp(nav_input)
+        z_nav_logvar = self.z_nav_logvar_mlp(nav_input)
         
+        # Prepare inputs for adversarial head
+        adv_input = nav_input # Contains vit_encoding + obs_lowdim
+        if self.other_state_dim > 0:
+            if other_state is None:
+                raise ValueError("other_state is required but not provided")
+            adv_input = torch.cat([adv_input, other_state], dim=-1)
+            
         # Generate adversarial intent latent distribution
-        z_adv_mean = self.z_adv_mean_mlp(vit_encoding)
-        z_adv_logvar = self.z_adv_logvar_mlp(vit_encoding)
+        z_adv_mean = self.z_adv_mean_mlp(adv_input)
+        z_adv_logvar = self.z_adv_logvar_mlp(adv_input)
         
         # Apply mask to adversarial intent (if provided)
         if adv_mask is not None:
