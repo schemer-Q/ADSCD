@@ -1,0 +1,64 @@
+project_name: adscd_gostanford
+run_name: stage1_test
+
+# --- 训练阶段 ---
+stage: 1  # 纯导航预训练
+
+stages:
+  1:
+    description: "Stage 1: Pure Navigation with GoStanford."
+    train_vision: True
+    train_nav: True
+    train_adv: False
+    train_diffusion: True
+    loss_weights:
+      nav_kl: 0.1
+      adv_kl: 0.0
+    use_adv_data: False
+  
+  2:
+    description: "Stage 2: Adv Tuning."
+    train_vision: False
+    train_nav: False
+    train_adv: True
+    train_diffusion: True
+    loss_weights:
+      nav_kl: 0.0
+      adv_kl: 0.1
+    use_adv_data: True
+
+# --- 基础参数 ---
+use_wandb: False # Dry run first
+seed: 42
+gpu_ids: [0]
+batch_size: 16 # Small for test
+num_workers: 0
+epochs: 3 
+lr: 1e-4
+grad_clip_norm: 1.0
+
+# --- 模型参数 ---
+model:
+  vision_encoder: nomad_vint
+  obs_encoding_size: 256
+  
+  z_nav_dim: 64
+  z_adv_dim: 64
+  
+  # Context matches GoStanford defaults usually
+  context_size: 5
+  image_size: [96, 96]
+  
+  down_dims: [64, 128, 256]
+  diffusion_iters: 10
+  
+  learn_angle: False
+  len_traj_pred: 8 
+
+# --- 数据集 ---
+dataset:
+  name: go_stanford
+  data_folder: /root/private_data/latent_diffusion_policy/Adversarial_Intent_Factorization/ADSCD/datasets/gostanford/go_stanford
+  split_path: /root/private_data/latent_diffusion_policy/Adversarial_Intent_Factorization/ADSCD/datasets/gostanford/split/train
+  # No metadata needed for Stage 1 / GoStanford
+  metadata_path: null

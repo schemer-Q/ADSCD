@@ -654,7 +654,9 @@ class ViNT_Dataset(Dataset):
                             txn.put(image_path.encode(), f.read())
 
         # Reopen the cache file in read-only mode
-        self._image_cache: lmdb.Environment = lmdb.open(cache_filename, readonly=True)
+        # Set max_readers to be high enough for multiprocessing
+        # Default is 126. If using 4 workers * context_size reads, it might exceed.
+        self._image_cache: lmdb.Environment = lmdb.open(cache_filename, readonly=True, max_readers=512, lock=False)
 
     def _build_index(self, use_tqdm: bool = False):
         """

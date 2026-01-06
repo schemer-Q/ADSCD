@@ -26,6 +26,7 @@ class ADSCD_DatasetWrapper(Dataset):
     """
     Wraps ViNT_Dataset to add 'other_state' and 'adv_mask'.
     Supports loading from external metadata files.
+    Also ensures 'goal_image' provided.
     """
     def __init__(self, vint_dataset, dataset_name, metadata_path=None, use_adv_data=True):
         self.dataset = vint_dataset
@@ -48,14 +49,17 @@ class ADSCD_DatasetWrapper(Dataset):
         data = self.dataset[idx] 
         # Attempt to unpack generally
         obs_image = data[0]
-        goal_image = data[1]
-        action = data[-1]
-        # item_dist = data[2]
+        goal_image = data[1] # ViNT Dataset automatically samples goal if properly configured
+        # If goal_image is all zeros or wrong shape, we might need manual sampling, 
+        # but standard ViNT_Dataset logic (lines 191+) handles goal sampling via _sample_goal.
+        
+        # FIXED: Action is at index 2, data[-1] is action_mask
+        action = data[2]
+        dataset_action_mask = data[6]
         
         # 2. Add 'Other State' and 'Adv Mask'
         other_state = torch.zeros(2) 
         adv_mask = torch.tensor([0.0])
-        adv_probs = 0.5 # Default random prob
         
         if self.use_adv_data:
             if self.metadata is not None:
@@ -77,6 +81,7 @@ class ADSCD_DatasetWrapper(Dataset):
             'obs_image': obs_image,
             'goal_image': goal_image,
             'action': action,
+            'dataset_action_mask': dataset_action_mask,
             'other_state': other_state,
             'adv_mask': adv_mask
         }
@@ -150,7 +155,7 @@ class ADSCDModel(nn.Module):
         # NoMaD encoder typically takes (obs_img, goal_img) or just obs.
         # Assuming NoMaD_ViNT forward signature: forward(obs_img, goal_img=None) -> features
         # We enforce context length behavior inside dataset or here.
-        features = self.vision_encoder(obs_img) # (B, feature_dim)
+        features = self.vision_encoder(obs_img, goal_img) # (B, feature_dim)
         
         # 2. Nav Encoder
         nav_mu_logvar = self.nav_head(features)
@@ -227,13 +232,14 @@ class ADSCDModel(nn.Module):
     
     def compute_loss(self, batch, stage_cfg):
         obs_img = batch['obs_image']
-        # goal_img = batch['goal_img'] # Not used in visual encoder features for now depending on nomad impl
+        goal_img = batch['goal_image'] # Used by vision encoder
         other_state = batch['other_state']
         adv_mask = batch['adv_mask']
         action = batch['action'] # (B, H, 2)
+        dataset_action_mask = batch.get('dataset_action_mask', torch.ones(action.shape[0], device=action.device))
         
         # Encoder Forward
-        stats = self.forward(obs_img, None, other_state, adv_mask)
+        stats = self.forward(obs_img, goal_img, other_state, adv_mask)
         z_cond = stats['z_cond']
         
         # Diffusion Training
@@ -254,7 +260,12 @@ class ADSCDModel(nn.Module):
         )
         
         # 1. Diffusion Loss (MSE)
-        diff_loss = nn.functional.mse_loss(noise_pred, noise)
+        # Apply mask: dataset_action_mask indicates if the action supervision is valid
+        diff_loss_full = nn.functional.mse_loss(noise_pred, noise, reduction='none')
+        diff_loss_sample = diff_loss_full.mean(dim=(1, 2)) # Avg over H, D
+        
+        mask = dataset_action_mask.view(-1)
+        diff_loss = (diff_loss_sample * mask).sum() / (mask.sum() + 1e-6)
         
         # 2. KL Divergence Losses
         # KL(N(mu, sigma) || N(0, 1)) = -0.5 * sum(1 + log_var - mu^2 - var)

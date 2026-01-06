@@ -111,8 +111,8 @@ class NoMaD_ViNT(nn.Module):
         obs_encoding = torch.cat((obs_encoding, goal_encoding), dim=1)
         
         # If a goal mask is provided, mask some of the goal tokens
-        if goal_mask is not None:
-            no_goal_mask = goal_mask.long()
+        if input_goal_mask is not None:
+            no_goal_mask = input_goal_mask.long()
             src_key_padding_mask = torch.index_select(self.all_masks.to(device), 0, no_goal_mask)
         else:
             src_key_padding_mask = None
