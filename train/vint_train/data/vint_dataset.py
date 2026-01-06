@@ -656,7 +656,15 @@ class ViNT_Dataset(Dataset):
         # Reopen the cache file in read-only mode
         # Set max_readers to be high enough for multiprocessing
         # Default is 126. If using 4 workers * context_size reads, it might exceed.
-        self._image_cache: lmdb.Environment = lmdb.open(cache_filename, readonly=True, max_readers=512, lock=False)
+        # DO NOT open here for MP safety
+        self.lmdb_path = cache_filename
+        self._image_cache = None # initialize later
+
+    def _get_image_cache(self):
+        # Lazy load to ensure PID safety
+        if self._image_cache is None:
+             self._image_cache = lmdb.open(self.lmdb_path, readonly=True, max_readers=512, lock=False)
+        return self._image_cache
 
     def _build_index(self, use_tqdm: bool = False):
         """
@@ -721,7 +729,7 @@ class ViNT_Dataset(Dataset):
         image_path = get_data_path(self.data_folder, trajectory_name, time)
 
         try:
-            with self._image_cache.begin() as txn:
+            with self._get_image_cache().begin() as txn:
                 image_buffer = txn.get(image_path.encode())
                 image_bytes = bytes(image_buffer)
             image_bytes = io.BytesIO(image_bytes)

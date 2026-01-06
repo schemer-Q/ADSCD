@@ -32,8 +32,8 @@ use_wandb: False # Dry run first
 seed: 42
 gpu_ids: [0]
 batch_size: 16 # Small for test
-num_workers: 0
-epochs: 3 
+num_workers: 4
+epochs: 1 
 lr: 1e-4
 grad_clip_norm: 1.0
 
