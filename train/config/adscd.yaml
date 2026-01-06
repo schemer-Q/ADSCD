@@ -1,0 +1,81 @@
+project_name: adscd
+run_name: adscd_proto
+
+# --- 训练阶段核心配置 ---
+# stage: 1  # 纯导航预训练 (Pure Nav Only)
+# stage: 2  # 对抗意图微调 (Adversarial Intent Tuning)
+stage: 3  # 联合微调 (Joint Fine-tuning)
+
+# 阶段详情定义
+stages:
+  1:
+    description: "Stage 1: Pure Navigation. Freeze Adv Head. Train ViT + Nav Head + Diffusion."
+    train_vision: True
+    train_nav: True
+    train_adv: False
+    train_diffusion: True
+    loss_weights:
+      nav_kl: 0.1
+      adv_kl: 0.0 # Disable Adv KL
+    use_adv_data: False # Force g=0
+    
+  2:
+    description: "Stage 2: Adversarial Tuning. Freeze ViT + Nav Head. Train Adv Head."
+    train_vision: False
+    train_nav: False
+    train_adv: True
+    train_diffusion: True # Optionally train diffusion to adapt to new z
+    loss_weights:
+      nav_kl: 0.0 # No need to optimize Nav KL if frozen
+      adv_kl: 0.1
+    use_adv_data: True # Enable g=0/1 mixing
+  
+  3:
+    description: "Stage 3: Joint Fine-tuning. Train All with small LR."
+    train_vision: True
+    train_nav: True
+    train_adv: True
+    train_diffusion: True
+    loss_weights:
+      nav_kl: 0.05
+      adv_kl: 0.05
+    use_adv_data: True
+
+# --- 基础训练参数 ---
+use_wandb: True
+seed: 42
+gpu_ids: [0]
+batch_size: 64
+num_workers: 4
+epochs: 50
+lr: 1e-4
+grad_clip_norm: 1.0
+
+# --- 模型架构参数 ---
+model:
+  vision_encoder: nomad_vint # options: nomad_vint, vit
+  obs_encoding_size: 256     # ViT 基础特征维度
+  
+  # Latent Dimensions
+  z_nav_dim: 64
+  z_adv_dim: 64
+  
+  # Context
+  context_size: 5
+  image_size: [96, 96]
+  
+  # Diffusion
+  down_dims: [64, 128, 256]
+  diffusion_iters: 10
+  
+  # Heads
+  learn_angle: False
+  len_traj_pred: 8
+
+# --- 数据集配置 ---
+dataset:
+  name: gazebo 
+  # 假设你有一个支持 other_state 的数据集
+  # 如果没有，脚本里会用 random mock 
+  data_folder: /path/to/dataset
+  split_path: /path/to/splits
