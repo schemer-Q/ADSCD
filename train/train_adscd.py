@@ -9,6 +9,9 @@ import wandb
 from tqdm import tqdm
 import sys
 import copy
+import matplotlib.pyplot as plt
+import io
+from PIL import Image as PILImage
 
 # Add path to allow imports of vint_train package
 # We need to add the directory CONTAINING vint_train, which is this script's directory
@@ -290,6 +293,43 @@ class ADSCDModel(nn.Module):
             'adv_kl': adv_kl
         }
 
+# --- 2.5 Visualization Utils ---
+def visualize_trajectory(gt_action, pred_action):
+    """
+    Inputs:
+        gt_action: (H, 2) numpy array
+        pred_action: (H, 2) numpy array
+    Returns:
+        wandb.Image
+    """
+    fig, ax = plt.subplots(figsize=(6, 6))
+    
+    # Plot Origin
+    ax.scatter([0], [0], c='black', marker='o', label='Robot Start', s=100)
+    
+    # Plot Ground Truth
+    ax.plot(gt_action[:, 0], gt_action[:, 1], 'g.-', label='Ground Truth', linewidth=2, markersize=10)
+    # Mark Goal (End of GT roughly)
+    ax.scatter(gt_action[-1, 0], gt_action[-1, 1], c='green', marker='*', s=150, label='GT Goal Approx')
+    
+    # Plot Prediction
+    ax.plot(pred_action[:, 0], pred_action[:, 1], 'r.-', label='Prediction', linewidth=2, markersize=10)
+    
+    ax.legend()
+    ax.grid(True)
+    ax.set_aspect('equal')
+    ax.set_xlabel('X (m)')
+    ax.set_ylabel('Y (m)')
+    ax.set_title('Trajectory Comparison')
+    
+    # Convert to image
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    image = PILImage.open(buf)
+    plt.close(fig)
+    return wandb.Image(image)
+
 # --- 3. 训练主循环 ---
 def main():
     parser = argparse.ArgumentParser()
@@ -378,12 +418,14 @@ def main():
     if cfg['use_wandb']:
         wandb.init(project=cfg['project_name'], name=f"{cfg['run_name']}_stage{curr_stage}", config=cfg)
         
+    global_step = 0
     model.train()
     for epoch in range(cfg['epochs']):
         pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}")
         total_loss = 0
         
         for batch in pbar:
+            global_step += 1
             # Device transfer
             batch = {k: v.to(device) for k, v in batch.items() if isinstance(v, torch.Tensor)}
             
@@ -407,7 +449,40 @@ def main():
             pbar.set_postfix({'loss': loss.item(), 'diff': loss_dict['diff_loss'].item()})
             
             if cfg['use_wandb']:
-                wandb.log(loss_dict)
+                # Log Losses
+                wandb.log(loss_dict, step=global_step)
+                
+                # Periodic Visualization (e.g. every 500 steps)
+                if global_step % 500 == 0:
+                    model.eval()
+                    # 1. Trajectory Viz (use first sample in batch)
+                    with torch.no_grad():
+                        # Get Single Sample Inputs
+                        viz_obs = batch['obs_image'][0:1]
+                        viz_goal = batch['goal_image'][0:1]
+                        viz_other = batch['other_state'][0:1]
+                        viz_mask = batch['adv_mask'][0:1]
+                        viz_gt_action = batch['action'][0].cpu().numpy() # (H, 2)
+                        
+                        # Inference
+                        viz_pred_action = model.get_action(viz_obs, viz_goal, viz_other, viz_mask)
+                        viz_pred_action = viz_pred_action[0].cpu().numpy()
+                        
+                        # Latent Distribution
+                        stats = model.forward(viz_obs, viz_goal, viz_other, viz_mask)
+                        nav_mu = stats['nav_dist'][0].cpu().numpy().flatten()
+                        adv_mu = stats['adv_dist_real'][0].cpu().numpy().flatten()
+                        
+                        traj_img = visualize_trajectory(viz_gt_action, viz_pred_action)
+                        
+                        log_data = {
+                            "viz/trajectory": traj_img,
+                            "viz/nav_mu_hist": wandb.Histogram(nav_mu),
+                            "viz/adv_mu_hist": wandb.Histogram(adv_mu)
+                        }
+                        wandb.log(log_data, step=global_step)
+                        
+                    model.train()
                 
         # Save Checkpoint
         if (epoch + 1) % 10 == 0:

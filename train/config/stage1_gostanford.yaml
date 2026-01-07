@@ -28,12 +28,12 @@ stages:
     use_adv_data: True
 
 # --- 基础参数 ---
-use_wandb: False # Dry run first
+use_wandb: True # Dry run first
 seed: 42
 gpu_ids: [0]
-batch_size: 16 # Small for test
-num_workers: 4
-epochs: 1 
+batch_size: 128 # Small for test
+num_workers: 8
+epochs: 20
 lr: 1e-4
 grad_clip_norm: 1.0
 

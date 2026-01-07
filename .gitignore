@@ -2,6 +2,8 @@
 *.log
 *.pth
 *.ckpt
+*.json
+
 __pycache__/
 .ipynb_checkpoints/
 .DS_Store
@@ -9,6 +11,7 @@ datasets/
 demo_eval/
 demo_output/
 checkpoint/
+wandb/
 
 core.43023
 core.43990
