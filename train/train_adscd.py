@@ -9,6 +9,8 @@ import wandb
 from tqdm import tqdm
 import sys
 import copy
+import matplotlib
+matplotlib.use('Agg') # Set backend for headless environment
 import matplotlib.pyplot as plt
 import io
 from PIL import Image as PILImage
@@ -18,6 +20,9 @@ from PIL import Image as PILImage
 sys.path.append(os.path.dirname(__file__))
 
 # Import Project Modules
+# Add 'diffusion_policy' root directory to path so we can import the inner diffusion_policy package
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../diffusion_policy")))
+
 from vint_train.models.vint.vit import ViT
 from vint_train.models.nomad.nomad_vint import NoMaD_ViNT, replace_bn_with_gn
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
@@ -58,6 +63,8 @@ class ADSCD_DatasetWrapper(Dataset):
         
         # FIXED: Action is at index 2, data[-1] is action_mask
         action = data[2]
+        dist_label = data[3] # Topological Distance usually at index 3
+        goal_pos = data[4]
         dataset_action_mask = data[6]
         
         # 2. Add 'Other State' and 'Adv Mask'
@@ -84,6 +91,8 @@ class ADSCD_DatasetWrapper(Dataset):
             'obs_image': obs_image,
             'goal_image': goal_image,
             'action': action,
+            'dist_label': dist_label,
+            'goal_pos': goal_pos,
             'dataset_action_mask': dataset_action_mask,
             'other_state': other_state,
             'adv_mask': adv_mask
@@ -116,6 +125,16 @@ class ADSCDModel(nn.Module):
             nn.Linear(feature_dim, 256),
             nn.ReLU(),
             nn.Linear(256, config['model']['z_nav_dim'] * 2) # mu, logvar
+        )
+        
+        # B.2 Distance Pred Head (Auxiliary Task)
+        # Usually dist classes depend on dataset config (max_dist_cat). 
+        # We assume a safe default or config value.
+        self.num_dist_classes = config['model'].get('num_dist_classes', 20)
+        self.dist_head = nn.Sequential(
+            nn.Linear(feature_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, self.num_dist_classes)
         )
         
         # C. Adv Head (E_adv): [Features, OtherState] -> z_adv (Gaussian Params)
@@ -165,6 +184,9 @@ class ADSCDModel(nn.Module):
         nav_mu, nav_logvar = torch.chunk(nav_mu_logvar, 2, dim=1)
         z_nav = self.reparameterize(nav_mu, nav_logvar)
         
+        # 2.5 Distance Prediction
+        dist_pred = self.dist_head(features) # (B, num_classes)
+        
         # 3. Adv Encoder
         # --- Robustness Fix ---
         # 如果 g=0 (adv_mask=0), 强制 other_state 为 0。
@@ -188,7 +210,8 @@ class ADSCDModel(nn.Module):
             'z_cond': z_cond,
             'nav_dist': (nav_mu, nav_logvar),
             'adv_dist': (nav_mu, nav_logvar), # Typo fixed in thought: should be adv vars
-            'adv_dist_real': (adv_mu, adv_logvar)
+            'adv_dist_real': (adv_mu, adv_logvar),
+            'dist_pred': dist_pred
         }
 
     @torch.no_grad()
@@ -239,11 +262,13 @@ class ADSCDModel(nn.Module):
         other_state = batch['other_state']
         adv_mask = batch['adv_mask']
         action = batch['action'] # (B, H, 2)
+        dist_label = batch.get('dist_label', None)
         dataset_action_mask = batch.get('dataset_action_mask', torch.ones(action.shape[0], device=action.device))
         
         # Encoder Forward
         stats = self.forward(obs_img, goal_img, other_state, adv_mask)
         z_cond = stats['z_cond']
+        dist_pred = stats['dist_pred']
         
         # Diffusion Training
         # Sample noise
@@ -281,24 +306,39 @@ class ADSCDModel(nn.Module):
         adv_mu, adv_logvar = stats['adv_dist_real']
         adv_kl = -0.5 * torch.sum(1 + adv_logvar - adv_mu.pow(2) - adv_logvar.exp(), dim=1).mean()
         
+        # 3. Distance Loss (Cross Entropy)
+        dist_loss = torch.tensor(0.0, device=action.device)
+        if dist_label is not None and stage_cfg.get('train_dist', False):
+            # Clip label to num_classes
+            # Using CrossEntropyLoss
+            ce_loss = nn.CrossEntropyLoss()
+            # Ensure label is within range [0, num_classes-1]
+            dist_label_clipped = torch.clamp(dist_label, min=0, max=self.num_dist_classes-1)
+            dist_loss = ce_loss(dist_pred, dist_label_clipped)
+
         # Total Loss
         total_loss = diff_loss + \
                      stage_cfg['loss_weights']['nav_kl'] * nav_kl + \
                      stage_cfg['loss_weights']['adv_kl'] * adv_kl
+        
+        if stage_cfg.get('train_dist', False):
+            total_loss += stage_cfg['loss_weights'].get('dist_ce', 0.0) * dist_loss
                      
         return {
             'loss': total_loss,
             'diff_loss': diff_loss,
             'nav_kl': nav_kl,
-            'adv_kl': adv_kl
+            'adv_kl': adv_kl,
+            'dist_loss': dist_loss
         }
 
 # --- 2.5 Visualization Utils ---
-def visualize_trajectory(gt_action, pred_action):
+def visualize_trajectory(gt_action, pred_action, goal_pos=None):
     """
     Inputs:
         gt_action: (H, 2) numpy array
         pred_action: (H, 2) numpy array
+        goal_pos: (2,) numpy array (optional)
     Returns:
         wandb.Image
     """
@@ -309,8 +349,14 @@ def visualize_trajectory(gt_action, pred_action):
     
     # Plot Ground Truth
     ax.plot(gt_action[:, 0], gt_action[:, 1], 'g.-', label='Ground Truth', linewidth=2, markersize=10)
-    # Mark Goal (End of GT roughly)
-    ax.scatter(gt_action[-1, 0], gt_action[-1, 1], c='green', marker='*', s=150, label='GT Goal Approx')
+    
+    # Mark Goal (Subgoal)
+    if goal_pos is not None:
+        ax.scatter(goal_pos[0], goal_pos[1], c='blue', marker='x', s=200, label='Subgoal', linewidths=3)
+        # Connect last GT point to Subgoal? Usually minimal gap.
+    else:
+        # Fallback approximation
+        ax.scatter(gt_action[-1, 0], gt_action[-1, 1], c='green', marker='*', s=150, label='GT End')
     
     # Plot Prediction
     ax.plot(pred_action[:, 0], pred_action[:, 1], 'r.-', label='Prediction', linewidth=2, markersize=10)
@@ -402,6 +448,9 @@ def main():
     # Nav
     for p in model.nav_head.parameters():
         p.requires_grad = stage_cfg['train_nav']
+    # Dist
+    for p in model.dist_head.parameters():
+        p.requires_grad = stage_cfg.get('train_dist', False)
     # Adv
     for p in model.adv_head.parameters():
         p.requires_grad = stage_cfg['train_adv']
@@ -449,40 +498,48 @@ def main():
             pbar.set_postfix({'loss': loss.item(), 'diff': loss_dict['diff_loss'].item()})
             
             if cfg['use_wandb']:
-                # Log Losses
-                wandb.log(loss_dict, step=global_step)
+                # Collect all logs for this step
+                log_data = loss_dict.copy()
                 
                 # Periodic Visualization (e.g. every 500 steps)
                 if global_step % 500 == 0:
                     model.eval()
-                    # 1. Trajectory Viz (use first sample in batch)
-                    with torch.no_grad():
-                        # Get Single Sample Inputs
-                        viz_obs = batch['obs_image'][0:1]
-                        viz_goal = batch['goal_image'][0:1]
-                        viz_other = batch['other_state'][0:1]
-                        viz_mask = batch['adv_mask'][0:1]
-                        viz_gt_action = batch['action'][0].cpu().numpy() # (H, 2)
-                        
-                        # Inference
-                        viz_pred_action = model.get_action(viz_obs, viz_goal, viz_other, viz_mask)
-                        viz_pred_action = viz_pred_action[0].cpu().numpy()
-                        
-                        # Latent Distribution
-                        stats = model.forward(viz_obs, viz_goal, viz_other, viz_mask)
-                        nav_mu = stats['nav_dist'][0].cpu().numpy().flatten()
-                        adv_mu = stats['adv_dist_real'][0].cpu().numpy().flatten()
-                        
-                        traj_img = visualize_trajectory(viz_gt_action, viz_pred_action)
-                        
-                        log_data = {
-                            "viz/trajectory": traj_img,
-                            "viz/nav_mu_hist": wandb.Histogram(nav_mu),
-                            "viz/adv_mu_hist": wandb.Histogram(adv_mu)
-                        }
-                        wandb.log(log_data, step=global_step)
-                        
-                    model.train()
+                    try:
+                        # 1. Trajectory Viz (use first sample in batch)
+                        with torch.no_grad():
+                            # Get Single Sample Inputs
+                            viz_obs = batch['obs_image'][0:1]
+                            viz_goal = batch['goal_image'][0:1]
+                            viz_other = batch['other_state'][0:1]
+                            viz_mask = batch['adv_mask'][0:1]
+                            
+                            viz_gt_action = batch['action'][0].cpu().numpy() # (H, 2)
+                            viz_goal_pos = batch['goal_pos'][0].cpu().numpy() if 'goal_pos' in batch else None
+                            
+                            # Inference
+                            viz_pred_action = model.get_action(viz_obs, viz_goal, viz_other, viz_mask)
+                            viz_pred_action = viz_pred_action[0].cpu().numpy()
+                            
+                            # Latent Distribution
+                            stats = model.forward(viz_obs, viz_goal, viz_other, viz_mask)
+                            nav_mu = stats['nav_dist'][0].cpu().numpy().flatten()
+                            adv_mu = stats['adv_dist_real'][0].cpu().numpy().flatten()
+                            
+                            traj_img = visualize_trajectory(viz_gt_action, viz_pred_action, viz_goal_pos)
+                            
+                            viz_logs = {
+                                "viz/trajectory": traj_img,
+                                "viz/nav_mu_hist": wandb.Histogram(nav_mu),
+                                "viz/adv_mu_hist": wandb.Histogram(adv_mu)
+                            }
+                            log_data.update(viz_logs)
+                    except Exception as e:
+                        print(f"Visualization failed at step {global_step}: {e}")
+                    finally:
+                        model.train()
+                
+                # Single Commit
+                wandb.log(log_data, step=global_step)
                 
         # Save Checkpoint
         if (epoch + 1) % 10 == 0:

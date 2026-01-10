@@ -1,5 +1,5 @@
 project_name: adscd_gostanford
-run_name: stage1_test
+run_name: dist_pre_test # stage1_test
 
 # --- 训练阶段 ---
 stage: 1  # 纯导航预训练
@@ -9,11 +9,13 @@ stages:
     description: "Stage 1: Pure Navigation with GoStanford."
     train_vision: True
     train_nav: True
+    train_dist: True
     train_adv: False
     train_diffusion: True
     loss_weights:
-      nav_kl: 0.1
+      nav_kl: 0.001
       adv_kl: 0.0
+      dist_ce: 0.1
     use_adv_data: False
   
   2:
@@ -33,7 +35,7 @@ seed: 42
 gpu_ids: [0]
 batch_size: 128 # Small for test
 num_workers: 8
-epochs: 20
+epochs: 10
 lr: 1e-4
 grad_clip_norm: 1.0
 
@@ -44,6 +46,7 @@ model:
   
   z_nav_dim: 64
   z_adv_dim: 64
+  num_dist_classes: 20
   
   # Context matches GoStanford defaults usually
   context_size: 5

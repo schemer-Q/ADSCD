@@ -26,7 +26,13 @@ class NoMaD_ViNT(nn.Module):
 
         # Initialize the observation encoder
         if obs_encoder.split("-")[0] == "efficientnet":
-            self.obs_encoder = EfficientNet.from_name(obs_encoder, in_channels=3) # context
+            try:
+                print(f"Loading pretrained weights for {obs_encoder} (Obs Encoder)...")
+                self.obs_encoder = EfficientNet.from_pretrained(obs_encoder, in_channels=3)
+            except Exception as e:
+                print(f"Warning: Failed to load pretrained weights for Obs Encoder ({e}). Using random init.")
+                self.obs_encoder = EfficientNet.from_name(obs_encoder, in_channels=3) # context
+            
             self.obs_encoder = replace_bn_with_gn(self.obs_encoder)
             self.num_obs_features = self.obs_encoder._fc.in_features
             self.obs_encoder_type = "efficientnet"
@@ -34,6 +40,8 @@ class NoMaD_ViNT(nn.Module):
             raise NotImplementedError
         
         # Initialize the goal encoder
+        # Note: In_channels=6 makes direct pretrained loading tricky. 
+        # For now we use random init for goal encoder or partial loading if implemented.
         self.goal_encoder = EfficientNet.from_name("efficientnet-b0", in_channels=6) # obs+goal
         self.goal_encoder = replace_bn_with_gn(self.goal_encoder)
         self.num_goal_features = self.goal_encoder._fc.in_features
