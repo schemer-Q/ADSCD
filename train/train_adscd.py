@@ -27,7 +27,10 @@ from vint_train.models.vint.vit import ViT
 from vint_train.models.nomad.nomad_vint import NoMaD_ViNT, replace_bn_with_gn
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
+from diffusers.training_utils import EMAModel
 from vint_train.data.vint_dataset import ViNT_Dataset
+from warmup_scheduler import GradualWarmupScheduler
+import torch.optim.lr_scheduler as lr_scheduler
 
 # --- 1. 定义增强的数据集 Wrapper ---
 class ADSCD_DatasetWrapper(Dataset):
@@ -128,13 +131,11 @@ class ADSCDModel(nn.Module):
         )
         
         # B.2 Distance Pred Head (Auxiliary Task)
-        # Usually dist classes depend on dataset config (max_dist_cat). 
-        # We assume a safe default or config value.
-        self.num_dist_classes = config['model'].get('num_dist_classes', 20)
+        # Using Regression (Scalar Output) now to match NoMaD best practices
         self.dist_head = nn.Sequential(
             nn.Linear(feature_dim, 128),
             nn.ReLU(),
-            nn.Linear(128, self.num_dist_classes)
+            nn.Linear(128, 1)
         )
         
         # C. Adv Head (E_adv): [Features, OtherState] -> z_adv (Gaussian Params)
@@ -169,7 +170,7 @@ class ADSCDModel(nn.Module):
         eps = torch.randn_like(std)
         return mu + eps * std
 
-    def forward(self, obs_img, goal_img, other_state, adv_mask):
+    def forward(self, obs_img, goal_img, other_state, adv_mask, input_goal_mask=None):
         """
         Forward pass for training.
         """
@@ -177,7 +178,7 @@ class ADSCDModel(nn.Module):
         # NoMaD encoder typically takes (obs_img, goal_img) or just obs.
         # Assuming NoMaD_ViNT forward signature: forward(obs_img, goal_img=None) -> features
         # We enforce context length behavior inside dataset or here.
-        features = self.vision_encoder(obs_img, goal_img) # (B, feature_dim)
+        features = self.vision_encoder(obs_img, goal_img, input_goal_mask=input_goal_mask) # (B, feature_dim)
         
         # 2. Nav Encoder
         nav_mu_logvar = self.nav_head(features)
@@ -215,7 +216,7 @@ class ADSCDModel(nn.Module):
         }
 
     @torch.no_grad()
-    def get_action(self, obs_img, goal_img, other_state=None, adv_mask=None):
+    def get_action(self, obs_img, goal_img, other_state=None, adv_mask=None, input_goal_mask=None):
         """
         推理专用接口：处理缺失输入的情况
         """
@@ -231,7 +232,7 @@ class ADSCDModel(nn.Module):
             other_state = torch.zeros((B, 2), device=device)
             
         # Get Latents
-        stats = self.forward(obs_img, goal_img, other_state, adv_mask)
+        stats = self.forward(obs_img, goal_img, other_state, adv_mask, input_goal_mask=input_goal_mask)
         z_cond = stats['z_cond']
         
         # Diffusion Inference
@@ -265,8 +266,16 @@ class ADSCDModel(nn.Module):
         dist_label = batch.get('dist_label', None)
         dataset_action_mask = batch.get('dataset_action_mask', torch.ones(action.shape[0], device=action.device))
         
-        # Encoder Forward
-        stats = self.forward(obs_img, goal_img, other_state, adv_mask)
+        # --- Goal Masking Logic (NoMaD Alignment) ---
+        # Probability of masking goal from config
+        goal_mask_prob = self.config['model'].get('goal_mask_prob', 0.5)
+        B = obs_img.shape[0]
+        # 1 = Masked (No Goal), 0 = Visible
+        # If train_dist is True, we definitely want to use masking to robustify
+        goal_mask = (torch.rand((B,), device=obs_img.device) < goal_mask_prob).long()
+        
+        # Encoder Forward with Goal Mask
+        stats = self.forward(obs_img, goal_img, other_state, adv_mask, input_goal_mask=goal_mask)
         z_cond = stats['z_cond']
         dist_pred = stats['dist_pred']
         
@@ -306,15 +315,20 @@ class ADSCDModel(nn.Module):
         adv_mu, adv_logvar = stats['adv_dist_real']
         adv_kl = -0.5 * torch.sum(1 + adv_logvar - adv_mu.pow(2) - adv_logvar.exp(), dim=1).mean()
         
-        # 3. Distance Loss (Cross Entropy)
+        # 3. Distance Loss (Regression MSE)
         dist_loss = torch.tensor(0.0, device=action.device)
         if dist_label is not None and stage_cfg.get('train_dist', False):
-            # Clip label to num_classes
-            # Using CrossEntropyLoss
-            ce_loss = nn.CrossEntropyLoss()
-            # Ensure label is within range [0, num_classes-1]
-            dist_label_clipped = torch.clamp(dist_label, min=0, max=self.num_dist_classes-1)
-            dist_loss = ce_loss(dist_pred, dist_label_clipped)
+            # NoMaD Logic: MSE Loss only on unmasked goals
+            dist_label = dist_label.float()
+            # Raw MSE (per sample)
+            # dist_pred shape (B, 1), dist_label shape (B,)
+            dist_mse = nn.functional.mse_loss(dist_pred.squeeze(-1), dist_label, reduction='none')
+            
+            # Mask out cases where Goal was Masked (goal_mask=1)
+            # We want to train dist only where goal_mask=0
+            valid_dist_mask = (1 - goal_mask.float())
+            
+            dist_loss = (dist_mse * valid_dist_mask).mean() / (valid_dist_mask.mean() + 1e-2)
 
         # Total Loss
         total_loss = diff_loss + \
@@ -462,6 +476,43 @@ def main():
     print(f"Trainable parameters: {len(trainable_params)} tensors")
     
     optimizer = torch.optim.AdamW(trainable_params, lr=float(cfg['lr']))
+    print(f"DEBUG: Optimizer Initial LR: {optimizer.param_groups[0]['lr']}")
+
+    # --- Scheduler & Warmup (Aligned with NoMaD) ---
+    scheduler_type = cfg.get('scheduler', 'cosine')
+    scheduler = None
+    
+    if scheduler_type == 'cosine':
+        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg['epochs'])
+    elif scheduler_type == 'cyclic':
+        scheduler = lr_scheduler.CyclicLR(
+            optimizer, 
+            base_lr=float(cfg['lr']) / 10., 
+            max_lr=float(cfg['lr']),
+            step_size_up=cfg.get('cyclic_period', 10) // 2,
+            cycle_momentum=False
+        )
+    elif scheduler_type == 'plateau':
+        scheduler = lr_scheduler.ReduceLROnPlateau(
+            optimizer, 
+            factor=cfg.get('plateau_factor', 0.5), 
+            patience=cfg.get('plateau_patience', 3), 
+            verbose=True
+        )
+
+    if cfg.get('warmup', True) and scheduler is not None:
+        print(f"Using warmup scheduler (epochs={cfg.get('warmup_epochs', 4)})")
+        scheduler = GradualWarmupScheduler(
+            optimizer,
+            multiplier=1,
+            total_epoch=cfg.get('warmup_epochs', 4),
+            after_scheduler=scheduler
+        )
+        scheduler.step() # Initialize to non-zero LR for first epoch
+
+    # --- EMA (Aligned with NoMaD) ---
+    ema_model = EMAModel(parameters=model.parameters(), power=0.75)
+    print("EMA Model initialized.")
     
     # 4. Training Loop
     if cfg['use_wandb']:
@@ -489,10 +540,25 @@ def main():
             optimizer.zero_grad()
             loss.backward()
             
+            # DEBUG: Check Gradients
+            total_norm = 0.0
+            for p in trainable_params:
+                if p.grad is not None:
+                    param_norm = p.grad.data.norm(2)
+                    total_norm += param_norm.item() ** 2
+            total_norm = total_norm ** 0.5
+            
+            if global_step % 10 == 0:
+                print(f"DEBUG Step {global_step}: Loss={loss.item():.4f}, Total Grad Norm={total_norm:.4f}, LR={optimizer.param_groups[0]['lr']:.6f}")
+
+
             if cfg['grad_clip_norm'] > 0:
                 torch.nn.utils.clip_grad_norm_(trainable_params, cfg['grad_clip_norm'])
                 
             optimizer.step()
+            
+            # Step EMA
+            ema_model.step(model.parameters())
             
             total_loss += loss.item()
             pbar.set_postfix({'loss': loss.item(), 'diff': loss_dict['diff_loss'].item()})
@@ -500,6 +566,7 @@ def main():
             if cfg['use_wandb']:
                 # Collect all logs for this step
                 log_data = loss_dict.copy()
+                log_data['lr'] = optimizer.param_groups[0]['lr']
                 
                 # Periodic Visualization (e.g. every 500 steps)
                 if global_step % 500 == 0:
@@ -540,11 +607,43 @@ def main():
                 
                 # Single Commit
                 wandb.log(log_data, step=global_step)
+        
+        # Step Scheduler at End of Epoch
+        if scheduler is not None:
+            if isinstance(scheduler, lr_scheduler.ReduceLROnPlateau):
+                 # Placeholder: Use last batch loss or accumulate average if precise
+                 scheduler.step(total_loss / len(dataloader))
+            else:
+                scheduler.step()
                 
         # Save Checkpoint
         if (epoch + 1) % 10 == 0:
-            ckpt_path = f"checkpoint_stage{curr_stage}_epoch{epoch+1}.pth"
-            torch.save(model.state_dict(), ckpt_path)
+            # Create output directory based on run_name in ADSCD root
+            # Script is in ADSCD/train/, so we go up one level
+            save_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), cfg['run_name'])
+            os.makedirs(save_dir, exist_ok=True)
+            
+            ckpt_path = os.path.join(save_dir, f"checkpoint_stage{curr_stage}_epoch{epoch+1}.pth")
+            
+            # --- EMA State Extraction (Compatible with older diffusers) ---
+            ema_model.store(model.parameters())
+            ema_model.copy_to(model.parameters())
+            ema_inference_state = {k: v.clone() for k, v in model.state_dict().items()}
+            ema_model.restore(model.parameters())
+            
+            # Save Model + EMA
+            save_dict = {
+                'model_state_dict': model.state_dict(),
+                'ema_state_dict': ema_inference_state,
+                'ema_internal_state': ema_model.state_dict(), # For resuming
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
+                'epoch': epoch + 1
+            }
+            torch.save(save_dict, ckpt_path)
+            # Support loading legacy/simple format by saving separate EMA if needed, or just one dict
+            # Standard NoMaD saves separate files? We try to keep it simple self-contained.
+            
             print(f"Saved checkpoint to {ckpt_path}")
 
 if __name__ == "__main__":

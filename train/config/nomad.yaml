@@ -1,11 +1,11 @@
-project_name: nomad
+project_name: adscd_gostanford
 run_name: nomad
 
 # training setup
 use_wandb: true # set to false if you don't want to log to wandb
 train: True
 batch_size: 128
-epochs: 30
+epochs: 10
 gpu_ids: [0]
 num_workers: 12
 lr: 1e-4
@@ -43,7 +43,7 @@ normalize: True
 
 # context
 context_type: temporal
-context_size: 3 # 5 和current_time step 有关
+context_size: 5 # 5 和current_time step 有关
 alpha: 1e-4
 
 # distance bounds for distance and action and distance predictions 
@@ -61,6 +61,13 @@ learn_angle: False
 # dataset specific parameters
 image_size: [96, 96] # width, height
 datasets:
+  go_stanford:
+    data_folder: /root/private_data/latent_diffusion_policy/Adversarial_Intent_Factorization/ADSCD/datasets/gostanford/go_stanford
+    train: /root/private_data/latent_diffusion_policy/Adversarial_Intent_Factorization/ADSCD/datasets/gostanford/split/train
+    test: /root/private_data/latent_diffusion_policy/Adversarial_Intent_Factorization/ADSCD/datasets/gostanford/split/test
+    goals_per_obs: 1
+    negative_mining: True
+
   # recon:
   #   data_folder: /home/<username>/nomad_dataset/recon
   #   train: /home/<username>/data_splits/recon/train/ # path to train folder with traj_names.txt
@@ -74,12 +81,12 @@ datasets:
   #   test: /home/user/diffusion_policy_project/visualnav-transformer/train/vint_train/data/data_splits/go_stanford/test/
   #   goals_per_obs: 2 # increase dataset size
   #   negative_mining: True
-  gazebo:
-    data_folder: /home/user/diffusion_policy_project/visualnav-transformer/gazebo
-    train: /home/user/diffusion_policy_project/visualnav-transformer/train/vint_train/data/data_splits/gazebo/train/
-    test: /home/user/diffusion_policy_project/visualnav-transformer/train/vint_train/data/data_splits/gazebo/test/
-    goals_per_obs: 2 # increase dataset size
-    negative_mining: True
+  # gazebo:
+  #   data_folder: /home/user/diffusion_policy_project/visualnav-transformer/gazebo
+  #   train: /home/user/diffusion_policy_project/visualnav-transformer/train/vint_train/data/data_splits/gazebo/train/
+  #   test: /home/user/diffusion_policy_project/visualnav-transformer/train/vint_train/data/data_splits/gazebo/test/
+  #   goals_per_obs: 2 # increase dataset size
+  #   negative_mining: True
 
   # cory_hall:
   #   data_folder: /home/<username>/nomad_dataset/cory_hall/
@@ -128,4 +135,5 @@ eval_fraction: 0.25
 wandb_log_freq: 10 # in iterations
 eval_freq: 1 # in epochs
 
-pretrained_path: /home/user/diffusion_policy_project/visualnav-transformer/train/logs/nomad/nomad_2025_11_30_22_25_00/latest.pth  #预加载模型的地址
+# pretrained_path: /home/user/diffusion_policy_project/visualnav-transformer/train/logs/nomad/nomad_2025_11_30_22_25_00/latest.pth  #预加载模型的地址
+pretrained_path: null

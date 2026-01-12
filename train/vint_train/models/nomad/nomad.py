@@ -116,9 +116,14 @@ class NoMaD(nn.Module):
         self.dist_pred_net = dist_pred_net
 
         self.z_dim = z_dim
-
+        
         # latent → condition 的投影（非常关键）
-        self.z_proj = nn.Linear(z_dim, noise_pred_net.global_cond_dim)
+        embedding_dim = noise_pred_net.global_cond_dim
+        self.z_proj = nn.Sequential(
+            nn.Linear(z_dim, embedding_dim // 4),
+            nn.ReLU(),
+            nn.Linear(embedding_dim // 4, embedding_dim),
+        )
 
     def _merge_cond(self, global_cond, latent_z):
         """

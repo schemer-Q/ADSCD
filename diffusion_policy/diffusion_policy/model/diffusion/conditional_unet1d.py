@@ -79,6 +79,7 @@ class ConditionalUnet1D(nn.Module):
         cond_predict_scale=False
         ):
         super().__init__()
+        self.global_cond_dim = global_cond_dim
         all_dims = [input_dim] + list(down_dims)
         start_dim = down_dims[0]
 

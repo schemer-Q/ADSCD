@@ -196,7 +196,7 @@ def train_eval_loop_nomad(
         eval_freq: frequency of evaluation
     """
     latest_path = os.path.join(project_folder, f"latest.pth")
-    ema_model = EMAModel(model=model,power=0.75)
+    ema_model = EMAModel(parameters=model.parameters(), power=0.75)
     # latent 条件参数
     z_dim = getattr(model, "z_dim", 16)  # 如果 model 有 z_dim 属性则使用
     p_prob = latent_drop_prob   # classifier-free 丢弃概率，可从 config 中获取

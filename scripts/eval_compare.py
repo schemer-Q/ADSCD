@@ -75,12 +75,12 @@ class ADSCDModel(nn.Module):
             nn.Linear(256, config['model']['z_nav_dim'] * 2) 
         )
         
-        # B.2 Distance Head (Added in last iteration)
-        self.num_dist_classes = config['model'].get('num_dist_classes', 20)
+        # B.2 Distance Head (Updated to Regression for consistency with New Model)
+        # We will handle loading mismatch for old models in safety wrapper
         self.dist_head = nn.Sequential(
             nn.Linear(feature_dim, 128),
             nn.ReLU(),
-            nn.Linear(128, self.num_dist_classes)
+            nn.Linear(128, 1) # Regression
         )
         
         # C. Adv Head
@@ -117,6 +117,7 @@ class ADSCDModel(nn.Module):
         nav_mu, nav_logvar = torch.chunk(nav_mu_logvar, 2, dim=1)
         z_nav = self.reparameterize(nav_mu, nav_logvar)
         
+        # Updated Logic: Minimal mock
         other_state_clean = other_state * adv_mask 
         adv_input = torch.cat([features, other_state_clean], dim=1)
         adv_mu_logvar = self.adv_head(adv_input)
@@ -145,6 +146,32 @@ class ADSCDModel(nn.Module):
             noise_residual = self.noise_pred_net(noisy_action, t, global_cond=z_cond)
             noisy_action = self.noise_scheduler.step(noise_residual, t, noisy_action).prev_sample
         return noisy_action
+
+def load_model_safe(model, path, device):
+    """
+    Load state dict with filtering for mismatched shapes (e.g. dist_head)
+    """
+    print(f"Safe Loading from {path}...")
+    sd = torch.load(path, map_location=device)
+    model_sd = model.state_dict()
+    
+    filtered_sd = {}
+    skipped_keys = []
+    for k, v in sd.items():
+        if k in model_sd:
+            if v.shape == model_sd[k].shape:
+                filtered_sd[k] = v
+            else:
+                skipped_keys.append(k)
+        else:
+             pass 
+            
+    if skipped_keys:
+        print(f"Warning: Skipped loading {len(skipped_keys)} mismatched keys: {skipped_keys}")
+        
+    model.load_state_dict(filtered_sd, strict=False)
+    model.eval()
+    return model
 
 # --- Ablation Model ---
 class AblationModel(nn.Module):
@@ -278,15 +305,14 @@ def main():
         config = yaml.safe_load(f)
 
     # 1. Load Models
-    print("Loading Baseline Model...")
+    print("Loading Baseline Model (ADSCD V1 - Classification)...")
     model_base = ADSCDModel(config).to(device)
-    model_base.load_state_dict(torch.load(args.ckpt_base, map_location=device))
-    model_base.eval()
+    load_model_safe(model_base, args.ckpt_base, device)
     
-    print("Loading Ablation Model...")
-    model_ablation = AblationModel(config).to(device)
-    model_ablation.load_state_dict(torch.load(args.ckpt_ablation, map_location=device))
-    model_ablation.eval()
+    print("Loading Optimized Model (ADSCD V2 - Regression & Goal Mask)...")
+    # Using same class, will load successfully
+    model_new = ADSCDModel(config).to(device)
+    load_model_safe(model_new, args.ckpt_ablation, device)
 
     # 2. Load Data
     data_folder = config['dataset']['data_folder']
@@ -319,7 +345,7 @@ def main():
 
     # 3. Eval Loop
     metrics_base = {'ade': 0.0, 'fde': 0.0, 'count': 0}
-    metrics_ablation = {'ade': 0.0, 'fde': 0.0, 'count': 0}
+    metrics_new = {'ade': 0.0, 'fde': 0.0, 'count': 0}
     
     viz_done = False
     
@@ -334,8 +360,8 @@ def main():
             # Baseline Pred
             pred_base = model_base.get_action(obs, goal, None, None)
             
-            # Ablation Pred
-            pred_ablation = model_ablation.get_action(obs, goal)
+            # Optimized Pred (New)
+            pred_new = model_new.get_action(obs, goal)
             
             # Metrics
             ade_b, fde_b, n_b = compute_metrics(pred_base, action, mask)
@@ -343,15 +369,15 @@ def main():
             metrics_base['fde'] += fde_b
             metrics_base['count'] += n_b
             
-            ade_a, fde_a, n_a = compute_metrics(pred_ablation, action, mask)
-            metrics_ablation['ade'] += ade_a
-            metrics_ablation['fde'] += fde_a
-            metrics_ablation['count'] += n_a
+            ade_a, fde_a, n_a = compute_metrics(pred_new, action, mask)
+            metrics_new['ade'] += ade_a
+            metrics_new['fde'] += fde_a
+            metrics_new['count'] += n_a
             
             # Viz first valid batch
             if not viz_done and n_b > 0:
                 visualize_comparison(
-                    obs, goal, action, pred_base, pred_ablation, 
+                    obs, goal, action, pred_base, pred_new, 
                     os.path.join(args.output_dir, "comparison_viz.png")
                 )
                 viz_done = True
@@ -361,15 +387,15 @@ def main():
     print("COMPARISON RESULTS (Test Set)")
     print("="*40)
     
-    print(f"BASELINE MODEL (ADSCD w/ z_nav):")
-    print(f"  ADE: {metrics_base['ade']/metrics_base['count']:.4f}")
-    print(f"  FDE: {metrics_base['fde']/metrics_base['count']:.4f}")
+    print(f"BASELINE MODEL (Old - Classification):")
+    print(f"  ADE: {metrics_base['ade']/(metrics_base['count']+1e-6):.4f}")
+    print(f"  FDE: {metrics_base['fde']/(metrics_base['count']+1e-6):.4f}")
     
     print("-" * 40)
     
-    print(f"ABLATION MODEL (Direct Features):")
-    print(f"  ADE: {metrics_ablation['ade']/metrics_ablation['count']:.4f}")
-    print(f"  FDE: {metrics_ablation['fde']/metrics_ablation['count']:.4f}")
+    print(f"OPTIMIZED MODEL (New - Regression + Mask):")
+    print(f"  ADE: {metrics_new['ade']/(metrics_new['count']+1e-6):.4f}")
+    print(f"  FDE: {metrics_new['fde']/(metrics_new['count']+1e-6):.4f}")
     
     print("="*40)
     print(f"Visualization saved to {args.output_dir}/comparison_viz.png")
